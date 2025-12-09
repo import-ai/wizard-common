@@ -128,7 +128,7 @@ class BaseAgent(Generic[InputType, OutputType]):
             [
                 "# Output Format",
                 "You must respond with valid JSON that strictly follows the OpenAPI schema provided below. Do not include any additional text, explanations, or formatting outside of the JSON response.",
-                "Please ensure any unescaped internal quotes are turned into `\\\"`",
+                'Please ensure any unescaped internal quotes are turned into `\\"`',
                 md_json_dumps(get_openapi_schema(self.output_class)),
             ]
             if issubclass(self.output_class, BaseModel)
