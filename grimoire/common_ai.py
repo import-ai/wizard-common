@@ -8,7 +8,7 @@ from common import project_root
 from common.json_parser import parse_json
 from common.template_render import render_template
 from common.trace_info import TraceInfo
-from omnibox_common.grimoire.config import GrimoireOpenAIConfig
+from wizard_common.grimoire.config import GrimoireOpenAIConfig
 
 tracer = trace.get_tracer(__name__)
 
