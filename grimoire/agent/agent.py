@@ -14,7 +14,7 @@ from common import project_root
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 from common.utils import remove_continuous_break_lines
-from omnibox_wizard.wizard.config import Config
+from wizard_common.grimoire.config import GrimoireAgentConfig
 from wizard_common.grimoire.agent.stream_parser import (
     StreamParser,
     DeltaOperation,
@@ -244,7 +244,7 @@ class UserQueryPreprocessor:
 
 
 class BaseSearchableAgent(BaseStreamable, ABC):
-    def __init__(self, config: Config):
+    def __init__(self, config: GrimoireAgentConfig):
         self.knowledge_database_retriever = MeiliVectorRetriever(config=config.vector)
         self.web_search_retriever = SearXNG(
             base_url=config.tools.searxng.base_url, engines=config.tools.searxng.engines
@@ -294,7 +294,7 @@ class BaseSearchableAgent(BaseStreamable, ABC):
 
 
 class Agent(BaseSearchableAgent):
-    def __init__(self, config: Config, system_prompt_template_name: str):
+    def __init__(self, config: GrimoireAgentConfig, system_prompt_template_name: str):
         super().__init__(config)
         self.openai = config.grimoire.openai
 

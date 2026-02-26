@@ -18,7 +18,7 @@ from openai import AsyncOpenAI
 from opentelemetry import propagate, trace
 
 from common.trace_info import TraceInfo
-from omnibox_wizard.wizard.config import VectorConfig
+from wizard_common.grimoire.config import VectorConfig
 from wizard_common.grimoire.entity.chunk import Chunk, ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import (
     IndexRecord,
