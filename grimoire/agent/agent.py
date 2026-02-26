@@ -299,7 +299,7 @@ class Agent(BaseSearchableAgent):
         self.openai = config.grimoire.openai
 
         self.template_parser = TemplateParser(
-            base_dir=project_root.path("omnibox_wizard/resources/prompt_templates")
+            base_dir=project_root.path("wizard_common/resources/prompt_templates")
         )
         self.system_prompt_template = self.template_parser.get_template(
             system_prompt_template_name

@@ -16,9 +16,9 @@ tracer = trace.get_tracer(__name__)
 class CommonAI:
     def __init__(self, config: GrimoireOpenAIConfig):
         self.config: GrimoireOpenAIConfig = config
-        with project_root.open("omnibox_wizard/resources/prompts/title.md") as f:
+        with project_root.open("wizard_common/resources/prompts/title.md") as f:
             self.title_system_prompt_template: str = f.read()
-        with project_root.open("omnibox_wizard/resources/prompts/tag.md") as f:
+        with project_root.open("wizard_common/resources/prompts/tag.md") as f:
             self.tag_system_prompt_template: str = f.read()
 
     @tracer.start_as_current_span("CommonAI._invoke")
