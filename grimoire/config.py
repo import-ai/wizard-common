@@ -16,7 +16,7 @@ class VectorConfig(BaseModel):
     dimension: int = Field(default=1536)
 
 
-GrimoireOpenAIConfigKey = Literal["mini", "default", "large"]
+GrimoireOpenAIConfigKey = Literal["mini", "default", "large", "vision"]
 
 
 class GrimoireOpenAIConfig(BaseModel):
@@ -26,6 +26,8 @@ class GrimoireOpenAIConfig(BaseModel):
     default_thinking: OpenAIConfig = Field(default=None)
     large: OpenAIConfig = Field(default_factory=OpenAIConfig)
     large_thinking: OpenAIConfig = Field(default=None)
+    vision: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    vision_thinking: OpenAIConfig = Field(default=None)
 
     def get_config(
         self,
