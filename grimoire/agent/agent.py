@@ -79,9 +79,10 @@ class UserQueryPreprocessor:
                     ),
                 }
             )
-            if not tool.resources or all(
-                r.type == PrivateSearchResourceType.FOLDER for r in tool.resources
-            ):
+            if (
+                not tool.resources
+                or all(r.type == PrivateSearchResourceType.FOLDER for r in tool.resources)
+            ) and cls.PRIVATE_SEARCH_TOOL_NAME in tool_executor_config:
                 func = tool_executor_config[cls.PRIVATE_SEARCH_TOOL_NAME]["func"]
                 retrievals: list[ResourceChunkRetrieval] = await func(
                     message.message["content"]
