@@ -44,7 +44,8 @@ class Citation(PromptCite):
     link: str
     updated_at: str | None = None
     source: str | None = None
-
+    namespace_id: str | None = None
+    
     def to_prompt(self, exclude_id: bool = False) -> str:
         attrs: dict = self.model_dump(exclude_none=True, exclude={"snippet", "link"})
         if (
