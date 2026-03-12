@@ -315,6 +315,27 @@ class MeiliVectorDB:
         hits.sort(key=lambda x: x.get("_rankingScore", 0), reverse=True)
         return hits[:limit]
 
+    async def _get_document_ids_by_filter(
+        self, index, filter_: List[str | List[str]]
+    ) -> List[str]:
+        """Query index with filter and return primary key ids of matching documents."""
+        ids: List[str] = []
+        limit = 1000
+        offset = 0
+        while True:
+            result = await index.search("", filter=filter_, limit=limit, offset=offset)
+            hits = result.hits
+            if not hits:
+                break
+            for hit in hits:
+                doc_id = hit.get("id")
+                if doc_id is not None:
+                    ids.append(doc_id)
+            if len(hits) < limit:
+                break
+            offset += limit
+        return ids
+
     @tracer.start_as_current_span("MeiliVectorDB.delete_from_both_indexes")
     async def delete_from_both_indexes(
         self, namespace_id: str, filter_: List[str | List[str]], tasks: List[TaskInfo]
@@ -323,10 +344,14 @@ class MeiliVectorDB:
 
         if self.has_old_index:
             old_index = client.index(self.index_uid)
-            tasks.append(await old_index.delete_documents_by_filter(filter=filter_))
+            old_ids = await self._get_document_ids_by_filter(old_index, filter_)
+            if old_ids:
+                tasks.append(await old_index.delete_documents(old_ids))
 
         index = client.index(self.get_shard(namespace_id))
-        tasks.append(await index.delete_documents_by_filter(filter=filter_))
+        ids = await self._get_document_ids_by_filter(index, filter_)
+        if ids:
+            tasks.append(await index.delete_documents(ids))
 
     @tracer.start_as_current_span("MeiliVectorDB.search")
     async def search(
