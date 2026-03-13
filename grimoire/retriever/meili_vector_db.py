@@ -158,7 +158,11 @@ class MeiliVectorDB:
         self, namespace_id: str, chunk_list: List[Chunk], tasks: List[TaskInfo]
     ):
         client = await self.get_or_init_client()
-        index = client.index(self.get_shard(namespace_id))
+        index = (
+            client.index(self.index_uid)
+            if self.has_old_index
+            else client.index(self.get_shard(namespace_id))
+        )
         for i in range(0, len(chunk_list), self.batch_size):
             raw_batch = chunk_list[i : i + self.batch_size]
 
