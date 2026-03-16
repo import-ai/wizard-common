@@ -35,7 +35,6 @@ def cmp(retrieval: BaseRetrieval) -> tuple[int, str, int, float]:
 
 
 def retrieval_wrapper(tool_call_id: str, retrievals: list[BaseRetrieval]) -> MessageDto:
-    retrievals = sorted(retrievals, key=cmp)
     content: str = retrievals2prompt(retrievals)
     return MessageDto.model_validate(
         {
@@ -115,10 +114,11 @@ class ToolExecutor:
                         assert all(isinstance(r, BaseRetrieval) for r in result), (
                             f"Expected all items to be BaseRetrieval, got {[type(r) for r in result]}"
                         )
-                        for i, r in enumerate(result):
+                        sorted_retrievals = sorted(result, key=cmp)
+                        for i, r in enumerate(sorted_retrievals):
                             r.id = current_cite_cnt + i + 1
                         message_dto: MessageDto = retrieval_wrapper(
-                            tool_call_id=tool_call_id, retrievals=result
+                            tool_call_id=tool_call_id, retrievals=sorted_retrievals
                         )
                     else:
                         raise ValueError(f"Unknown function: {function_name}")

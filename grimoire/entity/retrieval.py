@@ -86,5 +86,6 @@ def retrievals2prompt(retrievals: list[PromptCite]) -> str:
         retrieval_prompt_list.append(retrieval.to_prompt())
     if retrieval_prompt_list:
         retrieval_prompt: str = "\n\n".join(retrieval_prompt_list)
-        return "\n".join(["<retrievals>", retrieval_prompt, "</retrievals>"])
-    return "Not found"
+    else:
+        retrieval_prompt: str = ""
+    return "\n".join(["<retrievals>", retrieval_prompt, "</retrievals>"])
