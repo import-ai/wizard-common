@@ -76,6 +76,7 @@ class ResourceChunkRetrieval(BaseRetrieval):
     )
     chunk: Chunk
     source: Literal["private"] = "private"
+    namespace_id: str | None = Field(default=None, description="The namespace ID for this retrieval")
 
     def to_prompt(self, exclude_id: bool = False) -> str:
         citation = self.to_citation()
@@ -105,6 +106,7 @@ class ResourceChunkRetrieval(BaseRetrieval):
             title=self.chunk.title,
             snippet=self.chunk.text,
             link=self.chunk.resource_id,
+            namespace_id=self.namespace_id,
             updated_at=timestamp_to_datetime(self.chunk.updated_at),
             source=self.source,
         )
