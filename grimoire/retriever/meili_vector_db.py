@@ -274,6 +274,32 @@ class MeiliVectorDB:
             }
         return {}
 
+    @tracer.start_as_current_span("MeiliVectorDB.search_one_index")
+    async def _search_one_index(
+        self,
+        index_uid: str,
+        query: str,
+        filter_: List[str | List[str]],
+        limit: int,
+        vector_params: dict,
+        **search_kwargs,
+    ):
+        client = await self.get_or_init_client()
+        index = client.index(index_uid)
+        result = await index.search(
+            query,
+            filter=filter_,
+            limit=limit,
+            **vector_params,
+            **search_kwargs,
+            show_ranking_score=True,
+        )
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("meilisearch.index_uid", index_uid)
+            span.set_attribute("meilisearch.hits_count", len(result.hits))
+        return result
+
     @tracer.start_as_current_span("MeiliVectorDB.query_both_indexes")
     async def query_both_indexes(
         self,
@@ -284,33 +310,32 @@ class MeiliVectorDB:
         vector_params: dict,
         **search_kwargs,
     ) -> List[dict]:
-        client = await self.get_or_init_client()
-
         hits = []
         search_tasks = []
 
         if self.has_old_index:
-            old_index = client.index(self.index_uid)
-            task = old_index.search(
-                query,
-                filter=filter_,
-                limit=limit,
-                **vector_params,
-                **search_kwargs,
-                show_ranking_score=True,
+            search_tasks.append(
+                self._search_one_index(
+                    self.index_uid,
+                    query,
+                    filter_,
+                    limit,
+                    vector_params,
+                    **search_kwargs,
+                )
             )
-            search_tasks.append(task)
 
-        index = client.index(self.get_shard(namespace_id))
-        task = index.search(
-            query,
-            filter=filter_,
-            limit=limit,
-            **vector_params,
-            **search_kwargs,
-            show_ranking_score=True,
+        shard_uid = self.get_shard(namespace_id)
+        search_tasks.append(
+            self._search_one_index(
+                shard_uid,
+                query,
+                filter_,
+                limit,
+                vector_params,
+                **search_kwargs,
+            )
         )
-        search_tasks.append(task)
 
         results = await asyncio.gather(*search_tasks)
         for result in results:
@@ -367,6 +392,15 @@ class MeiliVectorDB:
         offset: int,
         limit: int,
     ) -> List[IndexRecord]:
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("search.namespace_id", namespace_id)
+            span.set_attribute("search.user_id", user_id or "")
+            span.set_attribute("search.query_length", len(query))
+            span.set_attribute("search.limit", limit)
+            span.set_attribute("search.offset", offset)
+            span.set_attribute("search.record_type", record_type.value or "")
+
         filter_: List[str | List[str]] = []
         filter_.append("namespace_id = {}".format(namespace_id))
         if user_id:
@@ -394,6 +428,12 @@ class MeiliVectorDB:
         k: int,
         filter_: List[str | List[str]],
     ) -> List[Tuple[Chunk, float]]:
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("search.namespace_id", namespace_id)
+            span.set_attribute("search.query_length", len(query))
+            span.set_attribute("search.k", k)
+
         combined_filters = filter_ + ["type = {}".format(IndexRecordType.chunk.value)]
         vector_params: dict = await self.vector_params(query)
         hits = await self.query_both_indexes(
