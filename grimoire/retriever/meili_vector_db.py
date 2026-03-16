@@ -394,7 +394,7 @@ class MeiliVectorDB:
             span.set_attribute("search.query_length", len(query))
             span.set_attribute("search.limit", limit)
             span.set_attribute("search.offset", offset)
-            span.set_attribute("search.record_type", record_type.value or "")
+            span.set_attribute("search.record_type", record_type.value if record_type else "")
 
         filter_: List[str | List[str]] = []
         filter_.append("namespace_id = {}".format(namespace_id))
