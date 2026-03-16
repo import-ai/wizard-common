@@ -279,20 +279,13 @@ class MeiliVectorDB:
         self,
         index_uid: str,
         query: str,
-        filter_: List[str | List[str]],
-        limit: int,
-        vector_params: dict,
         **search_kwargs,
     ):
         client = await self.get_or_init_client()
         index = client.index(index_uid)
         result = await index.search(
             query,
-            filter=filter_,
-            limit=limit,
-            **vector_params,
             **search_kwargs,
-            show_ranking_score=True,
         )
         span = trace.get_current_span()
         if span.is_recording():
@@ -305,9 +298,6 @@ class MeiliVectorDB:
         self,
         namespace_id: str,
         query: str,
-        filter_: List[str | List[str]],
-        limit: int,
-        vector_params: dict,
         **search_kwargs,
     ) -> List[dict]:
         hits = []
@@ -318,9 +308,7 @@ class MeiliVectorDB:
                 self._search_one_index(
                     self.index_uid,
                     query,
-                    filter_,
-                    limit,
-                    vector_params,
+                    show_ranking_score=True,
                     **search_kwargs,
                 )
             )
@@ -330,9 +318,7 @@ class MeiliVectorDB:
             self._search_one_index(
                 shard_uid,
                 query,
-                filter_,
-                limit,
-                vector_params,
+                show_ranking_score=True,
                 **search_kwargs,
             )
         )
@@ -341,18 +327,26 @@ class MeiliVectorDB:
         for result in results:
             hits.extend(result.hits)
 
+        limit = search_kwargs.get("limit")
         hits.sort(key=lambda x: x.get("_rankingScore", 0), reverse=True)
-        return hits[:limit]
+        return hits[:limit] if isinstance(limit, int) else hits
 
+    @tracer.start_as_current_span("MeiliVectorDB.get_document_ids_by_filter")
     async def _get_document_ids_by_filter(
-        self, index, filter_: List[str | List[str]]
+        self, index_uid: str, filter_: List[str | List[str]]
     ) -> List[str]:
         """Query index with filter and return primary key ids of matching documents."""
         ids: List[str] = []
         limit = 1000
         offset = 0
         while True:
-            result = await index.search("", filter=filter_, limit=limit, offset=offset)
+            result = await self._search_one_index(
+                index_uid,
+                "",
+                filter=filter_,
+                limit=limit,
+                offset=offset,
+            )
             hits = result.hits
             if not hits:
                 break
@@ -373,12 +367,13 @@ class MeiliVectorDB:
 
         if self.has_old_index:
             old_index = client.index(self.index_uid)
-            old_ids = await self._get_document_ids_by_filter(old_index, filter_)
+            old_ids = await self._get_document_ids_by_filter(self.index_uid, filter_)
             if old_ids:
                 tasks.append(await old_index.delete_documents(old_ids))
 
-        index = client.index(self.get_shard(namespace_id))
-        ids = await self._get_document_ids_by_filter(index, filter_)
+        shard_uid = self.get_shard(namespace_id)
+        index = client.index(shard_uid)
+        ids = await self._get_document_ids_by_filter(shard_uid, filter_)
         if ids:
             tasks.append(await index.delete_documents(ids))
 
@@ -414,9 +409,9 @@ class MeiliVectorDB:
         hits = await self.query_both_indexes(
             namespace_id,
             query,
-            filter_,
-            offset + limit,
-            vector_params,
+            filter=filter_,
+            limit=offset + limit,
+            **vector_params,
         )
         return [IndexRecord(**hit) for hit in hits[offset:]]
 
@@ -439,9 +434,9 @@ class MeiliVectorDB:
         hits = await self.query_both_indexes(
             namespace_id,
             query,
-            combined_filters,
-            k,
-            vector_params,
+            filter=combined_filters,
+            limit=k,
+            **vector_params,
         )
         output: List[Tuple[Chunk, float]] = []
         for hit in hits:
@@ -452,6 +447,7 @@ class MeiliVectorDB:
                 output.append((chunk, score))
         return output
 
+    @tracer.start_as_current_span("MeiliVectorDB.wait_for_tasks")
     async def wait_for_tasks(self, tasks: List[TaskInfo]):
         if self.config.wait_timeout > 0:
             client = await self.get_or_init_client()
