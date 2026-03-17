@@ -15,6 +15,7 @@ class Base(BaseModel):
 class TaskFunction(StrEnum):
     COLLECT = "collect"
     COLLECT_URL = "collect_url"
+    WEB_ANALYSIS = "web_analysis"
     UPSERT_INDEX = "upsert_index"
     DELETE_INDEX = "delete_index"
     FILE_READER = "file_reader"

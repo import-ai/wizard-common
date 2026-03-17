@@ -14,7 +14,7 @@ tracer = trace.get_tracer("wizard-common")
 
 
 async def stream_wrapper(
-        request: BaseModel, stream: AsyncIterator[ChatResponse], trace_info: TraceInfo
+    request: BaseModel, stream: AsyncIterator[ChatResponse], trace_info: TraceInfo
 ) -> AsyncIterator[dict]:
     span = trace.get_current_span()
     trace_info.debug({"request": request.model_dump(exclude_none=True)})
@@ -42,7 +42,7 @@ async def stream_wrapper(
 
 
 async def call_stream(
-        s: BaseStreamable, request: BaseChatRequest, trace_info: TraceInfo
+    s: BaseStreamable, request: BaseChatRequest, trace_info: TraceInfo
 ) -> AsyncIterator[dict]:
     with tracer.start_as_current_span("wizard.call_stream"):
         stream = s.astream(trace_info.get_child("agent"), request)
