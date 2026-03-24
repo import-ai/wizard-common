@@ -5,11 +5,18 @@ from pydantic import BaseModel, Field
 from wizard_common.config import OpenAIConfig
 
 
+class WeaviateConfig(BaseModel):
+    host: str | None = Field(default=None)
+    port: int = Field(default=8080)
+    api_key: str | None = Field(default=None)
+
+
 class VectorConfig(BaseModel):
     embedding: OpenAIConfig
     host: str
     port: int = Field(default=8000)
     meili_api_key: str = Field(default=None)
+    weaviate: WeaviateConfig = Field(default_factory=WeaviateConfig)
     batch_size: int = Field(default=1)
     max_results: int = Field(default=10)
     wait_timeout: int = Field(default=0)

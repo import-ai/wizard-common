@@ -1,9 +1,10 @@
 from enum import Enum
 from functools import partial
-from typing import List, Literal, Callable, TypedDict, Awaitable, Union, get_args, cast
+from typing import List, Literal, Callable, TypedDict, Awaitable, Union, get_args, cast, Any
 
 from opentelemetry import trace
 from pydantic import BaseModel, Field
+import weaviate.classes as wvc
 
 tracer = trace.get_tracer("grimoire.entity.tools")
 ToolName = Literal["private_search", "web_search"]
@@ -12,6 +13,8 @@ AsyncCallable = Callable[..., Awaitable]
 
 class Condition(BaseModel):
     namespace_id: str
+    user_id: str | None = Field(default=None)
+    record_type: str | None = Field(default=None)
     resource_ids: list[str] | None = Field(default=None)
     parent_ids: list[str] | None = Field(default=None)
     created_at: tuple[float, float] | None = Field(default=None)
@@ -45,6 +48,52 @@ class Condition(BaseModel):
             and_clause.append("chunk.updated_at <= {}".format(self.updated_at[1]))
 
         return and_clause
+
+    def to_weaviate_filters(self) -> Any:
+        where = wvc.query.Filter.by_property("namespace_id").equal(self.namespace_id)
+
+        if self.user_id:
+            where = where & (
+                wvc.query.Filter.by_property("user_id").is_none(True)
+                | wvc.query.Filter.by_property("user_id").equal(self.user_id)
+            )
+
+        if self.record_type:
+            where = where & wvc.query.Filter.by_property("type").equal(self.record_type)
+
+        if self.resource_ids:
+            resource_filter = None
+            for rid in self.resource_ids:
+                each = wvc.query.Filter.by_property("chunk.resource_id").equal(rid)
+                resource_filter = each if resource_filter is None else (resource_filter | each)
+            if resource_filter is not None:
+                where = where & resource_filter
+
+        if self.parent_ids:
+            parent_filter = None
+            for pid in self.parent_ids:
+                each = wvc.query.Filter.by_property("chunk.parent_id").equal(pid)
+                parent_filter = each if parent_filter is None else (parent_filter | each)
+            if parent_filter is not None:
+                where = where & parent_filter
+
+        if self.created_at is not None:
+            where = where & wvc.query.Filter.by_property("chunk.created_at").greater_or_equal(
+                self.created_at[0]
+            )
+            where = where & wvc.query.Filter.by_property("chunk.created_at").less_or_equal(
+                self.created_at[1]
+            )
+
+        if self.updated_at is not None:
+            where = where & wvc.query.Filter.by_property("chunk.updated_at").greater_or_equal(
+                self.updated_at[0]
+            )
+            where = where & wvc.query.Filter.by_property("chunk.updated_at").less_or_equal(
+                self.updated_at[1]
+            )
+
+        return where
 
 
 class ToolExecutorConfig(TypedDict):
