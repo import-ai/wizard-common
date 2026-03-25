@@ -11,7 +11,6 @@ class IndexRecordType(str, Enum):
 
 
 class IndexRecord(BaseModel):
-    id: str
     type: IndexRecordType
     namespace_id: str
     user_id: str | None = None

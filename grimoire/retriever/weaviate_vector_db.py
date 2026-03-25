@@ -64,9 +64,6 @@ class WeaviateVectorDB:
                         ),
                         properties=[
                             wvc.config.Property(
-                                name="id", data_type=wvc.config.DataType.TEXT
-                            ),
-                            wvc.config.Property(
                                 name="type", data_type=wvc.config.DataType.TEXT
                             ),
                             wvc.config.Property(
@@ -165,7 +162,6 @@ class WeaviateVectorDB:
             objects = []
             for chunk, vector in zip(batch, vectors):
                 record = IndexRecord(
-                    id=f"chunk_{chunk.chunk_id}",
                     type=IndexRecordType.chunk,
                     namespace_id=namespace_id,
                     chunk=chunk,
@@ -181,26 +177,28 @@ class WeaviateVectorDB:
     @tracer.start_as_current_span("WeaviateVectorDB.upsert_message")
     async def upsert_message(self, namespace_id: str, user_id: str, message: Message):
         collection = await self._get_shard(namespace_id)
-        record_id = f"message_{message.message_id}"
 
-        if not message.message.content.strip():
+        try:
             await collection.data.delete_many(
-                where=wvc.query.Filter.by_property("id").equal(record_id)
+                where=wvc.query.Filter.by_property("message.message_id").equal(
+                    message.message_id
+                )
             )
+        except UnexpectedStatusCodeError as e:
+            # 422: Tenant not found (no data yet for this namespace)
+            if e.status_code != 422:
+                raise
+
+        message_content = message.message.content.strip()
+        if not message_content:
             return
 
-        vector = (await self._embed(message.message.content or ""))[0]
+        vector = (await self._embed(message_content))[0]
         record = IndexRecord(
-            id=record_id,
             type=IndexRecordType.message,
             namespace_id=namespace_id,
             user_id=user_id,
             message=message,
-        )
-
-        # Upsert via delete-then-insert to keep the API behavior simple.
-        await collection.data.delete_many(
-            where=wvc.query.Filter.by_property("id").equal(record_id)
         )
 
         await collection.data.insert(
@@ -221,6 +219,7 @@ class WeaviateVectorDB:
                 )
             )
         except UnexpectedStatusCodeError as e:
+            # 422: Tenant not found (no data yet for this namespace)
             if e.status_code == 422:
                 return
             raise
@@ -237,6 +236,7 @@ class WeaviateVectorDB:
                 & wvc.query.Filter.by_property("chunk.resource_id").equal(resource_id)
             )
         except UnexpectedStatusCodeError as e:
+            # 422: Tenant not found (no data yet for this namespace)
             if e.status_code == 422:
                 return
             raise
