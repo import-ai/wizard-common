@@ -6,7 +6,7 @@ import weaviate
 import weaviate.classes as wvc
 from openai import AsyncOpenAI
 from opentelemetry import propagate, trace
-from weaviate.exceptions import UnexpectedStatusCodeError
+from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateDeleteManyError
 
 from common.trace_info import TraceInfo
 from wizard_common.grimoire.config import VectorConfig
@@ -53,83 +53,79 @@ class WeaviateVectorDB:
                 connect_kwargs["host"] = self.config.weaviate.host
             client = weaviate.use_async_with_local(**connect_kwargs)
             await client.connect()
+            self.client = client
 
-            if not await client.collections.exists(COLLECTION_NAME):
-                try:
-                    await client.collections.create(
-                        name=COLLECTION_NAME,
-                        vector_config=wvc.config.Configure.Vectors.self_provided(),
-                        multi_tenancy_config=wvc.config.Configure.multi_tenancy(
-                            enabled=True, auto_tenant_creation=True
-                        ),
-                        properties=[
+            if await client.collections.exists(COLLECTION_NAME):
+                return
+
+            await self.client.collections.create(
+                name=COLLECTION_NAME,
+                vector_config=wvc.config.Configure.Vectors.self_provided(),
+                multi_tenancy_config=wvc.config.Configure.multi_tenancy(
+                    enabled=True, auto_tenant_creation=True
+                ),
+                properties=[
+                    wvc.config.Property(
+                        name="type",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_filterable=True,
+                    ),
+                    wvc.config.Property(
+                        name="namespace_id",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_filterable=True,
+                    ),
+                    wvc.config.Property(
+                        name="user_id",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_filterable=True,
+                    ),
+                    wvc.config.Property(
+                        name="chunk",
+                        data_type=wvc.config.DataType.OBJECT,
+                        nested_properties=[
                             wvc.config.Property(
-                                name="type",
+                                name="resource_id",
                                 data_type=wvc.config.DataType.TEXT,
                                 index_filterable=True,
                             ),
                             wvc.config.Property(
-                                name="namespace_id",
+                                name="parent_id",
                                 data_type=wvc.config.DataType.TEXT,
                                 index_filterable=True,
                             ),
                             wvc.config.Property(
-                                name="user_id",
-                                data_type=wvc.config.DataType.TEXT,
+                                name="created_at",
+                                data_type=wvc.config.DataType.NUMBER,
                                 index_filterable=True,
+                                index_range_filters=True,
                             ),
                             wvc.config.Property(
-                                name="chunk",
-                                data_type=wvc.config.DataType.OBJECT,
-                                nested_properties=[
-                                    wvc.config.Property(
-                                        name="resource_id",
-                                        data_type=wvc.config.DataType.TEXT,
-                                        index_filterable=True,
-                                    ),
-                                    wvc.config.Property(
-                                        name="parent_id",
-                                        data_type=wvc.config.DataType.TEXT,
-                                        index_filterable=True,
-                                    ),
-                                    wvc.config.Property(
-                                        name="created_at",
-                                        data_type=wvc.config.DataType.NUMBER,
-                                        index_filterable=True,
-                                        index_range_filters=True,
-                                    ),
-                                    wvc.config.Property(
-                                        name="updated_at",
-                                        data_type=wvc.config.DataType.NUMBER,
-                                        index_filterable=True,
-                                        index_range_filters=True,
-                                    ),
-                                ],
-                            ),
-                            wvc.config.Property(
-                                name="message",
-                                data_type=wvc.config.DataType.OBJECT,
-                                nested_properties=[
-                                    wvc.config.Property(
-                                        name="message_id",
-                                        data_type=wvc.config.DataType.TEXT,
-                                        index_filterable=True,
-                                    ),
-                                    wvc.config.Property(
-                                        name="conversation_id",
-                                        data_type=wvc.config.DataType.TEXT,
-                                        index_filterable=True,
-                                    ),
-                                ],
+                                name="updated_at",
+                                data_type=wvc.config.DataType.NUMBER,
+                                index_filterable=True,
+                                index_range_filters=True,
                             ),
                         ],
-                    )
-                except UnexpectedStatusCodeError as e:
-                    # Concurrent creator already created the collection.
-                    if e.status_code != 422:
-                        raise
-            self.client = client
-            return
+                    ),
+                    wvc.config.Property(
+                        name="message",
+                        data_type=wvc.config.DataType.OBJECT,
+                        nested_properties=[
+                            wvc.config.Property(
+                                name="message_id",
+                                data_type=wvc.config.DataType.TEXT,
+                                index_filterable=True,
+                            ),
+                            wvc.config.Property(
+                                name="conversation_id",
+                                data_type=wvc.config.DataType.TEXT,
+                                index_filterable=True,
+                            ),
+                        ],
+                    ),
+                ],
+            )
 
     async def _get_shard(self, namespace_id: str):
         if not namespace_id:
@@ -228,10 +224,9 @@ class WeaviateVectorDB:
                     message.message_id
                 )
             )
-        except UnexpectedStatusCodeError as e:
-            # 422: Tenant not found (no data yet for this namespace)
-            if e.status_code != 422:
-                raise
+        except WeaviateDeleteManyError:
+            # Tenant not found (no data yet for this namespace)
+            pass
 
         message_content = message.message.content.strip()
         if not message_content:
@@ -262,11 +257,9 @@ class WeaviateVectorDB:
                     conversation_id
                 )
             )
-        except UnexpectedStatusCodeError as e:
-            # 422: Tenant not found (no data yet for this namespace)
-            if e.status_code == 422:
-                return
-            raise
+        except WeaviateDeleteManyError:
+            # Tenant not found (no data yet for this namespace)
+            pass
 
     @tracer.start_as_current_span("WeaviateVectorDB.remove_chunks")
     async def remove_chunks(self, namespace_id: str, resource_id: str):
@@ -279,11 +272,9 @@ class WeaviateVectorDB:
                 & wvc.query.Filter.by_property("namespace_id").equal(namespace_id)
                 & wvc.query.Filter.by_property("chunk.resource_id").equal(resource_id)
             )
-        except UnexpectedStatusCodeError as e:
-            # 422: Tenant not found (no data yet for this namespace)
-            if e.status_code == 422:
-                return
-            raise
+        except WeaviateDeleteManyError:
+            # Tenant not found (no data yet for this namespace)
+            pass
 
     @tracer.start_as_current_span("WeaviateVectorDB.search")
     async def search(
