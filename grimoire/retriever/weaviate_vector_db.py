@@ -64,6 +64,9 @@ class WeaviateVectorDB:
                 multi_tenancy_config=wvc.config.Configure.multi_tenancy(
                     enabled=True, auto_tenant_creation=True
                 ),
+                inverted_index_config=wvc.config.Configure.inverted_index(
+                    index_null_state=True
+                ),
                 properties=[
                     wvc.config.Property(
                         name="type",
