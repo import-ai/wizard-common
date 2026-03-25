@@ -64,19 +64,63 @@ class WeaviateVectorDB:
                         ),
                         properties=[
                             wvc.config.Property(
-                                name="type", data_type=wvc.config.DataType.TEXT
+                                name="type",
+                                data_type=wvc.config.DataType.TEXT,
+                                index_filterable=True,
                             ),
                             wvc.config.Property(
-                                name="namespace_id", data_type=wvc.config.DataType.TEXT
+                                name="namespace_id",
+                                data_type=wvc.config.DataType.TEXT,
+                                index_filterable=True,
                             ),
                             wvc.config.Property(
-                                name="user_id", data_type=wvc.config.DataType.TEXT
+                                name="user_id",
+                                data_type=wvc.config.DataType.TEXT,
+                                index_filterable=True,
                             ),
                             wvc.config.Property(
-                                name="chunk", data_type=wvc.config.DataType.OBJECT
+                                name="chunk",
+                                data_type=wvc.config.DataType.OBJECT,
+                                nested_properties=[
+                                    wvc.config.Property(
+                                        name="resource_id",
+                                        data_type=wvc.config.DataType.TEXT,
+                                        index_filterable=True,
+                                    ),
+                                    wvc.config.Property(
+                                        name="parent_id",
+                                        data_type=wvc.config.DataType.TEXT,
+                                        index_filterable=True,
+                                    ),
+                                    wvc.config.Property(
+                                        name="created_at",
+                                        data_type=wvc.config.DataType.NUMBER,
+                                        index_filterable=True,
+                                        index_range_filters=True,
+                                    ),
+                                    wvc.config.Property(
+                                        name="updated_at",
+                                        data_type=wvc.config.DataType.NUMBER,
+                                        index_filterable=True,
+                                        index_range_filters=True,
+                                    ),
+                                ],
                             ),
                             wvc.config.Property(
-                                name="message", data_type=wvc.config.DataType.OBJECT
+                                name="message",
+                                data_type=wvc.config.DataType.OBJECT,
+                                nested_properties=[
+                                    wvc.config.Property(
+                                        name="message_id",
+                                        data_type=wvc.config.DataType.TEXT,
+                                        index_filterable=True,
+                                    ),
+                                    wvc.config.Property(
+                                        name="conversation_id",
+                                        data_type=wvc.config.DataType.TEXT,
+                                        index_filterable=True,
+                                    ),
+                                ],
                             ),
                         ],
                     )
