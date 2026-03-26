@@ -1,16 +1,15 @@
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 import shortuuid
 from pydantic import Field
-
 from wizard_common.grimoire.entity.retrieval import (
     BaseRetrieval,
     Citation,
-    to_prompt,
     PromptContext,
+    to_prompt,
 )
 from wizard_common.grimoire.entity.tools import PrivateSearchResourceType
 
@@ -36,7 +35,6 @@ class Chunk(PromptContext):
     text: str | None = Field(default=None, description="Chunk content")
     chunk_type: ChunkType = Field(description="Chunk type")
 
-    user_id: str
     parent_id: str
 
     chunk_id: str = Field(description="ID of chunk", default_factory=shortuuid.uuid)
