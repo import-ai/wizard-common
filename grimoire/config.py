@@ -15,6 +15,7 @@ class VectorConfig(BaseModel):
     embedding: OpenAIConfig
     host: str
     port: int = Field(default=8000)
+    meili_api_key: str | None = Field(default=None)
     weaviate: WeaviateConfig = Field(default_factory=WeaviateConfig)
     batch_size: int = Field(default=1)
     max_results: int = Field(default=10)

@@ -20,6 +20,47 @@ class Condition(BaseModel):
     created_at: tuple[float, float] | None = Field(default=None)
     updated_at: tuple[float, float] | None = Field(default=None)
 
+    def to_meili_where(self) -> List[str | List[str]]:
+        and_clause: List[str | List[str]] = [
+            'namespace_id = "{}"'.format(self.namespace_id)
+        ]
+
+        if self.user_id:
+            and_clause.append(
+                [
+                    'user_id IS NULL',
+                    'user_id = "{}"'.format(self.user_id)
+                ]
+            )
+
+        if self.record_type:
+            and_clause.append('type = "{}"'.format(self.record_type))
+
+        or_clause: List[str] = []
+        if self.resource_ids:
+            or_clause.append(
+                "chunk.resource_id IN [{}]".format(
+                    ", ".join('"{}"'.format(rid) for rid in self.resource_ids)
+                )
+            )
+        if self.parent_ids:
+            or_clause.append(
+                "chunk.parent_id IN [{}]".format(
+                    ", ".join('"{}"'.format(pid) for pid in self.parent_ids)
+                )
+            )
+        if or_clause:
+            and_clause.append(or_clause)
+
+        if self.created_at is not None:
+            and_clause.append("chunk.created_at >= {}".format(self.created_at[0]))
+            and_clause.append("chunk.created_at <= {}".format(self.created_at[1]))
+        if self.updated_at is not None:
+            and_clause.append("chunk.updated_at >= {}".format(self.updated_at[0]))
+            and_clause.append("chunk.updated_at <= {}".format(self.updated_at[1]))
+
+        return and_clause
+
     def to_weaviate_filters(self) -> Any:
         where = wvc.query.Filter.by_property("namespace_id").equal(self.namespace_id)
 
