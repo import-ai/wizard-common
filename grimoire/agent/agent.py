@@ -40,8 +40,8 @@ from wizard_common.grimoire.entity.tools import (
     PrivateSearchResourceType,
 )
 from wizard_common.grimoire.retriever.base import BaseRetriever
-from wizard_common.grimoire.retriever.weaviate_vector_db import (
-    WeaviateVectorRetriever,
+from wizard_common.grimoire.retriever.meili_vector_db import (
+    MeiliVectorRetriever,
 )
 from wizard_common.grimoire.retriever.reranker import (
     get_tool_executor_config,
@@ -248,7 +248,7 @@ class UserQueryPreprocessor:
 
 class BaseSearchableAgent(BaseStreamable, ABC):
     def __init__(self, config: GrimoireAgentConfig):
-        self.knowledge_database_retriever = WeaviateVectorRetriever(config=config.vector)
+        self.knowledge_database_retriever = MeiliVectorRetriever(config=config.vector)
         self.web_search_retriever = SearXNG(
             base_url=config.tools.searxng.base_url, engines=config.tools.searxng.engines
         )
