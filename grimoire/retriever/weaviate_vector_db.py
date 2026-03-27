@@ -2,13 +2,9 @@ import asyncio
 from functools import partial
 from typing import Any, List, Tuple
 
-import weaviate
-import weaviate.classes as wvc
+from common.trace_info import TraceInfo
 from openai import AsyncOpenAI
 from opentelemetry import propagate, trace
-from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateDeleteManyError
-
-from common.trace_info import TraceInfo
 from wizard_common.grimoire.config import VectorConfig
 from wizard_common.grimoire.entity.chunk import Chunk, ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordType
@@ -21,6 +17,10 @@ from wizard_common.grimoire.entity.tools import (
     Resource,
 )
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
+
+import weaviate
+import weaviate.classes as wvc
+from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateDeleteManyError
 
 tracer = trace.get_tracer(__name__)
 COLLECTION_NAME = "omnibox_index"
@@ -84,48 +84,71 @@ class WeaviateVectorDB:
                         index_filterable=True,
                     ),
                     wvc.config.Property(
-                        name="chunk",
-                        data_type=wvc.config.DataType.OBJECT,
-                        nested_properties=[
-                            wvc.config.Property(
-                                name="resource_id",
-                                data_type=wvc.config.DataType.TEXT,
-                                index_filterable=True,
-                            ),
-                            wvc.config.Property(
-                                name="parent_id",
-                                data_type=wvc.config.DataType.TEXT,
-                                index_filterable=True,
-                            ),
-                            wvc.config.Property(
-                                name="created_at",
-                                data_type=wvc.config.DataType.NUMBER,
-                                index_filterable=True,
-                                index_range_filters=True,
-                            ),
-                            wvc.config.Property(
-                                name="updated_at",
-                                data_type=wvc.config.DataType.NUMBER,
-                                index_filterable=True,
-                                index_range_filters=True,
-                            ),
-                        ],
+                        name="chunk_title",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_searchable=True,
                     ),
                     wvc.config.Property(
-                        name="message",
-                        data_type=wvc.config.DataType.OBJECT,
-                        nested_properties=[
-                            wvc.config.Property(
-                                name="message_id",
-                                data_type=wvc.config.DataType.TEXT,
-                                index_filterable=True,
-                            ),
-                            wvc.config.Property(
-                                name="conversation_id",
-                                data_type=wvc.config.DataType.TEXT,
-                                index_filterable=True,
-                            ),
-                        ],
+                        name="chunk_text",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_searchable=True,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_resource_id",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_filterable=True,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_parent_id",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_filterable=True,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_type",
+                        data_type=wvc.config.DataType.TEXT,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_id",
+                        data_type=wvc.config.DataType.TEXT,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_start_index",
+                        data_type=wvc.config.DataType.INT,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_end_index",
+                        data_type=wvc.config.DataType.INT,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_created_at",
+                        data_type=wvc.config.DataType.NUMBER,
+                        index_filterable=True,
+                        index_range_filters=True,
+                    ),
+                    wvc.config.Property(
+                        name="chunk_updated_at",
+                        data_type=wvc.config.DataType.NUMBER,
+                        index_filterable=True,
+                        index_range_filters=True,
+                    ),
+                    wvc.config.Property(
+                        name="message_id",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_filterable=True,
+                    ),
+                    wvc.config.Property(
+                        name="conversation_id",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_filterable=True,
+                    ),
+                    wvc.config.Property(
+                        name="message_role",
+                        data_type=wvc.config.DataType.TEXT,
+                    ),
+                    wvc.config.Property(
+                        name="message_content",
+                        data_type=wvc.config.DataType.TEXT,
+                        index_searchable=True,
                     ),
                 ],
             )
@@ -204,14 +227,23 @@ class WeaviateVectorDB:
             vectors = await self._embed(prompts)
             objects = []
             for chunk, vector in zip(batch, vectors):
-                record = IndexRecord(
-                    type=IndexRecordType.chunk,
-                    namespace_id=namespace_id,
-                    chunk=chunk,
-                )
+                properties = {
+                    "type": IndexRecordType.chunk.value,
+                    "namespace_id": namespace_id,
+                }
+                properties["chunk_title"] = chunk.title
+                properties["chunk_text"] = chunk.text
+                properties["chunk_resource_id"] = chunk.resource_id
+                properties["chunk_parent_id"] = chunk.parent_id
+                properties["chunk_type"] = chunk.chunk_type.value
+                properties["chunk_id"] = chunk.chunk_id
+                properties["chunk_created_at"] = chunk.created_at
+                properties["chunk_updated_at"] = chunk.updated_at
+                properties["chunk_start_index"] = chunk.start_index
+                properties["chunk_end_index"] = chunk.end_index
                 objects.append(
                     wvc.data.DataObject(
-                        properties=record.model_dump(exclude_none=True),
+                        properties=properties,
                         vector=vector,
                     )
                 )
@@ -223,7 +255,7 @@ class WeaviateVectorDB:
 
         try:
             await collection.data.delete_many(
-                where=wvc.query.Filter.by_property("message.message_id").equal(
+                where=wvc.query.Filter.by_property("message_id").equal(
                     message.message_id
                 )
             )
@@ -236,16 +268,17 @@ class WeaviateVectorDB:
             return
 
         vector = (await self._embed(message_content))[0]
-        record = IndexRecord(
-            type=IndexRecordType.message,
-            namespace_id=namespace_id,
-            user_id=user_id,
-            message=message,
-        )
+        properties = {
+            "type": IndexRecordType.message.value,
+            "namespace_id": namespace_id,
+            "user_id": user_id,
+        }
+        properties["message_id"] = message.message_id
+        properties["conversation_id"] = message.conversation_id
+        properties["message_role"] = message.message.role
+        properties["message_content"] = message_content
 
-        await collection.data.insert(
-            properties=record.model_dump(exclude_none=True), vector=vector
-        )
+        await collection.data.insert(properties=properties, vector=vector)
 
     @tracer.start_as_current_span("WeaviateVectorDB.remove_conversation")
     async def remove_conversation(self, namespace_id: str, conversation_id: str):
@@ -256,9 +289,7 @@ class WeaviateVectorDB:
                     IndexRecordType.message.value
                 )
                 & wvc.query.Filter.by_property("namespace_id").equal(namespace_id)
-                & wvc.query.Filter.by_property("message.conversation_id").equal(
-                    conversation_id
-                )
+                & wvc.query.Filter.by_property("conversation_id").equal(conversation_id)
             )
         except WeaviateDeleteManyError:
             # Tenant not found (no data yet for this namespace)
@@ -273,7 +304,7 @@ class WeaviateVectorDB:
                     IndexRecordType.chunk.value
                 )
                 & wvc.query.Filter.by_property("namespace_id").equal(namespace_id)
-                & wvc.query.Filter.by_property("chunk.resource_id").equal(resource_id)
+                & wvc.query.Filter.by_property("chunk_resource_id").equal(resource_id)
             )
         except WeaviateDeleteManyError:
             # Tenant not found (no data yet for this namespace)
@@ -323,9 +354,19 @@ class WeaviateVectorDB:
         )
         output: List[Tuple[Chunk, float]] = []
         for hit, score in hits:
-            chunk_data = hit.get("chunk")
-            if chunk_data:
-                output.append((Chunk(**chunk_data), score))
+            chunk = Chunk(
+                title=hit.get("chunk_title"),
+                resource_id=hit["chunk_resource_id"],
+                text=hit.get("chunk_text"),
+                chunk_type=hit["chunk_type"],
+                parent_id=hit["chunk_parent_id"],
+                chunk_id=hit["chunk_id"],
+                created_at=hit["chunk_created_at"],
+                updated_at=hit["chunk_updated_at"],
+                start_index=hit.get("chunk_start_index"),
+                end_index=hit.get("chunk_end_index"),
+            )
+            output.append((chunk, score))
         return output
 
 

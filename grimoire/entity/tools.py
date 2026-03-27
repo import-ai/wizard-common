@@ -76,7 +76,7 @@ class Condition(BaseModel):
         if self.resource_ids:
             resource_filter = None
             for rid in self.resource_ids:
-                each = wvc.query.Filter.by_property("chunk.resource_id").equal(rid)
+                each = wvc.query.Filter.by_property("chunk_resource_id").equal(rid)
                 resource_filter = each if resource_filter is None else (resource_filter | each)
             if resource_filter is not None:
                 where = where & resource_filter
@@ -84,24 +84,24 @@ class Condition(BaseModel):
         if self.parent_ids:
             parent_filter = None
             for pid in self.parent_ids:
-                each = wvc.query.Filter.by_property("chunk.parent_id").equal(pid)
+                each = wvc.query.Filter.by_property("chunk_parent_id").equal(pid)
                 parent_filter = each if parent_filter is None else (parent_filter | each)
             if parent_filter is not None:
                 where = where & parent_filter
 
         if self.created_at is not None:
-            where = where & wvc.query.Filter.by_property("chunk.created_at").greater_or_equal(
+            where = where & wvc.query.Filter.by_property("chunk_created_at").greater_or_equal(
                 self.created_at[0]
             )
-            where = where & wvc.query.Filter.by_property("chunk.created_at").less_or_equal(
+            where = where & wvc.query.Filter.by_property("chunk_created_at").less_or_equal(
                 self.created_at[1]
             )
 
         if self.updated_at is not None:
-            where = where & wvc.query.Filter.by_property("chunk.updated_at").greater_or_equal(
+            where = where & wvc.query.Filter.by_property("chunk_updated_at").greater_or_equal(
                 self.updated_at[0]
             )
-            where = where & wvc.query.Filter.by_property("chunk.updated_at").less_or_equal(
+            where = where & wvc.query.Filter.by_property("chunk_updated_at").less_or_equal(
                 self.updated_at[1]
             )
 
