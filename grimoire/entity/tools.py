@@ -74,20 +74,10 @@ class Condition(BaseModel):
             where = where & wvc.query.Filter.by_property("type").equal(self.record_type)
 
         if self.resource_ids:
-            resource_filter = None
-            for rid in self.resource_ids:
-                each = wvc.query.Filter.by_property("chunk_resource_id").equal(rid)
-                resource_filter = each if resource_filter is None else (resource_filter | each)
-            if resource_filter is not None:
-                where = where & resource_filter
+            where = where & wvc.query.Filter.by_property("chunk_resource_id").contains_any(self.resource_ids)
 
         if self.parent_ids:
-            parent_filter = None
-            for pid in self.parent_ids:
-                each = wvc.query.Filter.by_property("chunk_parent_id").equal(pid)
-                parent_filter = each if parent_filter is None else (parent_filter | each)
-            if parent_filter is not None:
-                where = where & parent_filter
+            where = where & wvc.query.Filter.by_property("chunk_parent_id").contains_any(self.parent_ids)
 
         if self.created_at is not None:
             where = where & wvc.query.Filter.by_property("chunk_created_at").greater_or_equal(
