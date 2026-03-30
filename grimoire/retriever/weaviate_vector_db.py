@@ -72,16 +72,19 @@ class WeaviateVectorDB:
                         name="type",
                         data_type=wvc.config.DataType.TEXT,
                         index_filterable=True,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="namespace_id",
                         data_type=wvc.config.DataType.TEXT,
                         index_filterable=True,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="user_id",
                         data_type=wvc.config.DataType.TEXT,
                         index_filterable=True,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="chunk_title",
@@ -97,19 +100,23 @@ class WeaviateVectorDB:
                         name="chunk_resource_id",
                         data_type=wvc.config.DataType.TEXT,
                         index_filterable=True,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="chunk_parent_id",
                         data_type=wvc.config.DataType.TEXT,
                         index_filterable=True,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="chunk_type",
                         data_type=wvc.config.DataType.TEXT,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="chunk_id",
                         data_type=wvc.config.DataType.TEXT,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="chunk_start_index",
@@ -135,11 +142,13 @@ class WeaviateVectorDB:
                         name="message_id",
                         data_type=wvc.config.DataType.TEXT,
                         index_filterable=True,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="conversation_id",
                         data_type=wvc.config.DataType.TEXT,
                         index_filterable=True,
+                        tokenization=wvc.config.Tokenization.FIELD,
                     ),
                     wvc.config.Property(
                         name="message_role",
