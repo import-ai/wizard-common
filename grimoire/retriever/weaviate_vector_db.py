@@ -20,7 +20,11 @@ from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
 
 import weaviate
 import weaviate.classes as wvc
-from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateDeleteManyError
+from weaviate.exceptions import (
+    UnexpectedStatusCodeError,
+    WeaviateDeleteManyError,
+    WeaviateQueryError,
+)
 
 tracer = trace.get_tracer(__name__)
 COLLECTION_NAME = "omnibox_index"
@@ -240,9 +244,9 @@ class WeaviateVectorDB:
                 limit=search_limit,
                 return_metadata=wvc.query.MetadataQuery.full(),
             )
-        except UnexpectedStatusCodeError as e:
-            # Tenant not found -> no data yet.
-            if e.status_code == 422:
+        except WeaviateQueryError as e:
+            # gRPC path can return tenant-not-found as query error.
+            if "tenant not found" in str(e).lower():
                 return []
             raise
 
