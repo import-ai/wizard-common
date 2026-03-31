@@ -44,7 +44,10 @@ class WeaviateVectorDB:
             if self.client is not ...:
                 return
 
-            connect_kwargs: dict[str, Any] = {"port": self.config.weaviate.port}
+            connect_kwargs: dict[str, Any] = {
+                "port": self.config.weaviate.port,
+                "grpc_port": self.config.weaviate.grpc_port,
+            }
             if self.config.weaviate.api_key:
                 connect_kwargs["auth_credentials"] = wvc.init.Auth.api_key(
                     self.config.weaviate.api_key

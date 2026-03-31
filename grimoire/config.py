@@ -8,6 +8,7 @@ from wizard_common.config import OpenAIConfig
 class WeaviateConfig(BaseModel):
     host: str | None = Field(default=None)
     port: int = Field(default=8080)
+    grpc_port: int = Field(default=50051)
     api_key: str | None = Field(default=None)
 
 
