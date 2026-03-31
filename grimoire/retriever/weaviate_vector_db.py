@@ -8,7 +8,7 @@ from opentelemetry import propagate, trace
 from wizard_common.grimoire.config import VectorConfig
 from wizard_common.grimoire.entity.chunk import Chunk, ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordType
-from wizard_common.grimoire.entity.message import Message
+from wizard_common.grimoire.entity.message import Message, OpenAIMessage
 from wizard_common.grimoire.entity.retrieval import Score
 from wizard_common.grimoire.entity.tools import (
     Condition,
@@ -117,7 +117,7 @@ class WeaviateVectorDB:
             wvc.config.Property(
                 name="resource_tag_names",
                 data_type=wvc.config.DataType.TEXT_ARRAY,
-                index_filterable=True,
+                index_searchable=True,
                 tokenization=wvc.config.Tokenization.GSE_CH,
             ),
             wvc.config.Property(
@@ -228,6 +228,12 @@ class WeaviateVectorDB:
         try:
             response = await collection.query.hybrid(
                 query=query or "",
+                query_properties=[
+                    "chunk_title",
+                    "chunk_text",
+                    "message_content",
+                    "resource_tag_names",
+                ],
                 vector=vector,
                 alpha=0.5,
                 filters=condition.to_weaviate_filters(),
@@ -252,6 +258,53 @@ class WeaviateVectorDB:
 
         hits.sort(key=lambda x: x[1], reverse=True)
         return hits[offset : offset + limit]
+
+    @staticmethod
+    def _chunk_from_flat_doc(doc: dict) -> Chunk:
+        return Chunk(
+            title=doc.get("chunk_title"),
+            resource_id=doc["chunk_resource_id"],
+            text=doc.get("chunk_text"),
+            chunk_type=doc["chunk_type"],
+            parent_id=doc["chunk_parent_id"],
+            chunk_id=doc["chunk_id"],
+            created_at=doc["chunk_created_at"],
+            updated_at=doc["chunk_updated_at"],
+            start_index=doc.get("chunk_start_index"),
+            end_index=doc.get("chunk_end_index"),
+            resource_tag_ids=doc.get("resource_tag_ids") or [],
+            resource_tag_names=doc.get("resource_tag_names") or [],
+        )
+
+    @staticmethod
+    def _message_from_flat_doc(doc: dict) -> Message:
+        return Message(
+            conversation_id=doc["conversation_id"],
+            message_id=doc["message_id"],
+            message=OpenAIMessage(
+                role=doc.get("message_role") or "assistant",
+                content=doc.get("message_content") or "",
+            ),
+        )
+
+    @classmethod
+    def _index_record_from_flat_doc(cls, doc: dict) -> IndexRecord:
+        record_type = doc.get("type")
+        if record_type == IndexRecordType.chunk.value:
+            return IndexRecord(
+                type=IndexRecordType.chunk,
+                namespace_id=doc["namespace_id"],
+                user_id=doc.get("user_id"),
+                chunk=cls._chunk_from_flat_doc(doc),
+            )
+        if record_type == IndexRecordType.message.value:
+            return IndexRecord(
+                type=IndexRecordType.message,
+                namespace_id=doc["namespace_id"],
+                user_id=doc.get("user_id"),
+                message=cls._message_from_flat_doc(doc),
+            )
+        return IndexRecord(**doc)
 
     @tracer.start_as_current_span("WeaviateVectorDB.insert_chunks")
     async def insert_chunks(self, namespace_id: str, chunk_list: List[Chunk]):
@@ -380,7 +433,7 @@ class WeaviateVectorDB:
             limit=limit,
             offset=offset,
         )
-        return [IndexRecord(**hit) for hit, _ in hits]
+        return [self._index_record_from_flat_doc(hit) for hit, _ in hits]
 
     @tracer.start_as_current_span("WeaviateVectorDB.query_chunks")
     async def query_chunks(
@@ -401,20 +454,7 @@ class WeaviateVectorDB:
         )
         output: List[Tuple[Chunk, float]] = []
         for hit, score in hits:
-            chunk = Chunk(
-                title=hit.get("chunk_title"),
-                resource_id=hit["chunk_resource_id"],
-                text=hit.get("chunk_text"),
-                chunk_type=hit["chunk_type"],
-                parent_id=hit["chunk_parent_id"],
-                resource_tag_ids=hit.get("resource_tag_ids") or [],
-                resource_tag_names=hit.get("resource_tag_names") or [],
-                chunk_id=hit["chunk_id"],
-                created_at=hit["chunk_created_at"],
-                updated_at=hit["chunk_updated_at"],
-                start_index=hit.get("chunk_start_index"),
-                end_index=hit.get("chunk_end_index"),
-            )
+            chunk = self._chunk_from_flat_doc(hit)
             output.append((chunk, score))
         return output
 
