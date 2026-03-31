@@ -115,7 +115,7 @@ class WeaviateVectorDB:
                 name="resource_tag_names",
                 data_type=wvc.config.DataType.TEXT_ARRAY,
                 index_filterable=True,
-                tokenization=wvc.config.Tokenization.FIELD,
+                tokenization=wvc.config.Tokenization.GSE_CH,
             ),
             wvc.config.Property(
                 name="chunk_type",
