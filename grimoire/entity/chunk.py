@@ -36,6 +36,8 @@ class Chunk(PromptContext):
     chunk_type: ChunkType = Field(description="Chunk type")
 
     parent_id: str
+    resource_tag_ids: list[str] = Field(default_factory=list)
+    resource_tag_names: list[str] = Field(default_factory=list)
 
     chunk_id: str = Field(description="ID of chunk", default_factory=shortuuid.uuid)
     created_at: float = Field(

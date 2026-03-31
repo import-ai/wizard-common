@@ -106,6 +106,18 @@ class WeaviateVectorDB:
                 tokenization=wvc.config.Tokenization.FIELD,
             ),
             wvc.config.Property(
+                name="resource_tag_ids",
+                data_type=wvc.config.DataType.TEXT_ARRAY,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="resource_tag_names",
+                data_type=wvc.config.DataType.TEXT_ARRAY,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
                 name="chunk_type",
                 data_type=wvc.config.DataType.TEXT,
                 tokenization=wvc.config.Tokenization.FIELD,
@@ -265,6 +277,8 @@ class WeaviateVectorDB:
                 properties["chunk_text"] = chunk.text
                 properties["chunk_resource_id"] = chunk.resource_id
                 properties["chunk_parent_id"] = chunk.parent_id
+                properties["resource_tag_ids"] = chunk.resource_tag_ids
+                properties["resource_tag_names"] = chunk.resource_tag_names
                 properties["chunk_type"] = chunk.chunk_type.value
                 properties["chunk_id"] = chunk.chunk_id
                 properties["chunk_created_at"] = chunk.created_at
@@ -390,6 +404,8 @@ class WeaviateVectorDB:
                 text=hit.get("chunk_text"),
                 chunk_type=hit["chunk_type"],
                 parent_id=hit["chunk_parent_id"],
+                resource_tag_ids=hit.get("resource_tag_ids") or [],
+                resource_tag_names=hit.get("resource_tag_names") or [],
                 chunk_id=hit["chunk_id"],
                 created_at=hit["chunk_created_at"],
                 updated_at=hit["chunk_updated_at"],
