@@ -56,111 +56,132 @@ class WeaviateVectorDB:
             self.client = client
 
             if await client.collections.exists(COLLECTION_NAME):
-                return
+                await self._ensure_collection_properties()
+            else:
+                await self._create_collection()
 
-            await self.client.collections.create(
-                name=COLLECTION_NAME,
-                vector_config=wvc.config.Configure.Vectors.self_provided(),
-                multi_tenancy_config=wvc.config.Configure.multi_tenancy(
-                    enabled=True, auto_tenant_creation=True
-                ),
-                inverted_index_config=wvc.config.Configure.inverted_index(
-                    index_null_state=True
-                ),
-                properties=[
-                    wvc.config.Property(
-                        name="type",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_filterable=True,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="namespace_id",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_filterable=True,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="user_id",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_filterable=True,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_title",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_searchable=True,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_text",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_searchable=True,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_resource_id",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_filterable=True,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_parent_id",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_filterable=True,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_type",
-                        data_type=wvc.config.DataType.TEXT,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_id",
-                        data_type=wvc.config.DataType.TEXT,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_start_index",
-                        data_type=wvc.config.DataType.INT,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_end_index",
-                        data_type=wvc.config.DataType.INT,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_created_at",
-                        data_type=wvc.config.DataType.NUMBER,
-                        index_filterable=True,
-                        index_range_filters=True,
-                    ),
-                    wvc.config.Property(
-                        name="chunk_updated_at",
-                        data_type=wvc.config.DataType.NUMBER,
-                        index_filterable=True,
-                        index_range_filters=True,
-                    ),
-                    wvc.config.Property(
-                        name="message_id",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_filterable=True,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="conversation_id",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_filterable=True,
-                        tokenization=wvc.config.Tokenization.FIELD,
-                    ),
-                    wvc.config.Property(
-                        name="message_role",
-                        data_type=wvc.config.DataType.TEXT,
-                    ),
-                    wvc.config.Property(
-                        name="message_content",
-                        data_type=wvc.config.DataType.TEXT,
-                        index_searchable=True,
-                    ),
-                ],
-            )
+    @staticmethod
+    def _required_collection_properties() -> list[wvc.config.Property]:
+        return [
+            wvc.config.Property(
+                name="type",
+                data_type=wvc.config.DataType.TEXT,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="namespace_id",
+                data_type=wvc.config.DataType.TEXT,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="user_id",
+                data_type=wvc.config.DataType.TEXT,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="chunk_title",
+                data_type=wvc.config.DataType.TEXT,
+                index_searchable=True,
+                tokenization=wvc.config.Tokenization.GSE_CH,
+            ),
+            wvc.config.Property(
+                name="chunk_text",
+                data_type=wvc.config.DataType.TEXT,
+                index_searchable=True,
+                tokenization=wvc.config.Tokenization.GSE_CH,
+            ),
+            wvc.config.Property(
+                name="chunk_resource_id",
+                data_type=wvc.config.DataType.TEXT,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="chunk_parent_id",
+                data_type=wvc.config.DataType.TEXT,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="chunk_type",
+                data_type=wvc.config.DataType.TEXT,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="chunk_id",
+                data_type=wvc.config.DataType.TEXT,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="chunk_start_index",
+                data_type=wvc.config.DataType.INT,
+            ),
+            wvc.config.Property(
+                name="chunk_end_index",
+                data_type=wvc.config.DataType.INT,
+            ),
+            wvc.config.Property(
+                name="chunk_created_at",
+                data_type=wvc.config.DataType.NUMBER,
+                index_filterable=True,
+                index_range_filters=True,
+            ),
+            wvc.config.Property(
+                name="chunk_updated_at",
+                data_type=wvc.config.DataType.NUMBER,
+                index_filterable=True,
+                index_range_filters=True,
+            ),
+            wvc.config.Property(
+                name="message_id",
+                data_type=wvc.config.DataType.TEXT,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="conversation_id",
+                data_type=wvc.config.DataType.TEXT,
+                index_filterable=True,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="message_role",
+                data_type=wvc.config.DataType.TEXT,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
+                name="message_content",
+                data_type=wvc.config.DataType.TEXT,
+                index_searchable=True,
+                tokenization=wvc.config.Tokenization.GSE_CH,
+            ),
+        ]
+
+    async def _ensure_collection_properties(self) -> None:
+        required_properties = self._required_collection_properties()
+        collection = self.client.collections.get(COLLECTION_NAME)
+        config = await collection.config.get()
+        existing_names = {prop.name for prop in config.properties}
+        for prop in required_properties:
+            if prop.name not in existing_names:
+                await collection.config.add_property(prop)
+
+    async def _create_collection(self) -> None:
+        required_properties = self._required_collection_properties()
+        await self.client.collections.create(
+            name=COLLECTION_NAME,
+            vector_config=wvc.config.Configure.Vectors.self_provided(),
+            multi_tenancy_config=wvc.config.Configure.multi_tenancy(
+                enabled=True, auto_tenant_creation=True
+            ),
+            inverted_index_config=wvc.config.Configure.inverted_index(
+                index_null_state=True
+            ),
+            properties=required_properties,
+        )
 
     async def _get_shard(self, namespace_id: str):
         if not namespace_id:
@@ -193,7 +214,7 @@ class WeaviateVectorDB:
             response = await collection.query.hybrid(
                 query=query or "",
                 vector=vector,
-                alpha=0.5 if query else 1.0,
+                alpha=0.5,
                 filters=condition.to_weaviate_filters(),
                 limit=search_limit,
                 return_metadata=wvc.query.MetadataQuery.full(),
