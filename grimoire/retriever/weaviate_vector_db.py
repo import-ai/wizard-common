@@ -88,13 +88,13 @@ class WeaviateVectorDB:
                 name="chunk_title",
                 data_type=wvc.config.DataType.TEXT,
                 index_searchable=True,
-                tokenization=wvc.config.Tokenization.GSE_CH,
+                tokenization=wvc.config.Tokenization.TRIGRAM,
             ),
             wvc.config.Property(
                 name="chunk_text",
                 data_type=wvc.config.DataType.TEXT,
                 index_searchable=True,
-                tokenization=wvc.config.Tokenization.GSE_CH,
+                tokenization=wvc.config.Tokenization.TRIGRAM,
             ),
             wvc.config.Property(
                 name="chunk_resource_id",
@@ -118,7 +118,7 @@ class WeaviateVectorDB:
                 name="resource_tag_names",
                 data_type=wvc.config.DataType.TEXT_ARRAY,
                 index_searchable=True,
-                tokenization=wvc.config.Tokenization.GSE_CH,
+                tokenization=wvc.config.Tokenization.TRIGRAM,
             ),
             wvc.config.Property(
                 name="chunk_type",
@@ -171,7 +171,7 @@ class WeaviateVectorDB:
                 name="message_content",
                 data_type=wvc.config.DataType.TEXT,
                 index_searchable=True,
-                tokenization=wvc.config.Tokenization.GSE_CH,
+                tokenization=wvc.config.Tokenization.TRIGRAM,
             ),
         ]
 
