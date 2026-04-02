@@ -1,4 +1,6 @@
 import asyncio
+import json
+from dataclasses import asdict
 from functools import partial
 from typing import Any, List, Tuple
 
@@ -217,6 +219,7 @@ class WeaviateVectorDB:
         )
         return [item.embedding for item in embeddings.data]
 
+    @tracer.start_as_current_span("WeaviateVectorDB._hybrid_query")
     async def _hybrid_query(
         self,
         namespace_id: str,
@@ -243,6 +246,14 @@ class WeaviateVectorDB:
                 filters=condition.to_weaviate_filters(),
                 limit=search_limit,
                 return_metadata=wvc.query.MetadataQuery.full(),
+            )
+            trace.get_current_span().set_attributes(
+                {
+                    "weaviate.hybrid.object_count": len(response.objects),
+                    "weaviate.hybrid.response": json.dumps(
+                        asdict(response), ensure_ascii=False, default=str
+                    ),
+                }
             )
         except WeaviateQueryError as e:
             # gRPC path can return tenant-not-found as query error.
