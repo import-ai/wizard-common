@@ -242,7 +242,7 @@ class WeaviateVectorDB:
                     "resource_tag_names",
                 ],
                 vector=vector,
-                alpha=0.7,
+                alpha=0.3,
                 filters=condition.to_weaviate_filters(),
                 limit=search_limit,
                 return_metadata=wvc.query.MetadataQuery.full(),
