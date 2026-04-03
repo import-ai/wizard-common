@@ -250,6 +250,7 @@ class WeaviateVectorDB:
             )
             trace.get_current_span().set_attributes(
                 {
+                    "weaviate.hybrid.query": query,
                     "weaviate.hybrid.object_count": len(response.objects),
                     "weaviate.hybrid.response": json.dumps(
                         asdict(response), ensure_ascii=False, default=str
