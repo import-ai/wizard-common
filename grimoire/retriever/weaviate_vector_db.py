@@ -243,7 +243,7 @@ class WeaviateVectorDB:
                 ],
                 fusion_type=wvc.query.HybridFusion.RANKED,
                 vector=vector,
-                alpha=0.5,
+                alpha=0,
                 filters=condition.to_weaviate_filters(),
                 limit=search_limit,
                 return_metadata=wvc.query.MetadataQuery.full(),
