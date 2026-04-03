@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from dataclasses import asdict
 from functools import partial
 from typing import Any, List, Tuple
@@ -33,6 +34,9 @@ COLLECTION_NAME = "omnibox_index"
 
 
 class WeaviateVectorDB:
+    _english_letters_pattern = re.compile(r"[A-Za-z]+")
+    _whitespace_pattern = re.compile(r"\s+")
+
     def __init__(self, config: VectorConfig):
         self.config: VectorConfig = config
         self.batch_size: int = config.batch_size
@@ -230,6 +234,11 @@ class WeaviateVectorDB:
             properties=required_properties,
         )
 
+    @classmethod
+    def _strip_english_letters(cls, value: str) -> str:
+        without_english = cls._english_letters_pattern.sub(" ", value)
+        return cls._whitespace_pattern.sub(" ", without_english).strip()
+
     async def _get_shard(self, namespace_id: str):
         if not namespace_id:
             raise ValueError("namespace_id is required")
@@ -378,14 +387,19 @@ class WeaviateVectorDB:
                     "namespace_id": namespace_id,
                 }
                 properties["chunk_title"] = chunk.title
-                properties["chunk_title_gse"] = chunk.title
+                properties["chunk_title_gse"] = self._strip_english_letters(
+                    chunk.title
+                )
                 properties["chunk_text"] = chunk.text
-                properties["chunk_text_gse"] = chunk.text
+                properties["chunk_text_gse"] = self._strip_english_letters(chunk.text)
                 properties["chunk_resource_id"] = chunk.resource_id
                 properties["chunk_parent_id"] = chunk.parent_id
                 properties["resource_tag_ids"] = chunk.resource_tag_ids
                 properties["resource_tag_names"] = chunk.resource_tag_names
-                properties["resource_tag_names_gse"] = chunk.resource_tag_names
+                properties["resource_tag_names_gse"] = [
+                    self._strip_english_letters(name)
+                    for name in chunk.resource_tag_names
+                ]
                 properties["chunk_type"] = chunk.chunk_type.value
                 properties["chunk_id"] = chunk.chunk_id
                 properties["chunk_created_at"] = chunk.created_at
@@ -428,7 +442,9 @@ class WeaviateVectorDB:
         properties["conversation_id"] = message.conversation_id
         properties["message_role"] = message.message.role
         properties["message_content"] = message_content
-        properties["message_content_gse"] = message_content
+        properties["message_content_gse"] = self._strip_english_letters(
+            message_content
+        )
 
         await collection.data.insert(properties=properties, vector=vector)
 
