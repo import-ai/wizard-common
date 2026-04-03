@@ -259,7 +259,7 @@ class WeaviateVectorDB:
 
         search_limit = limit + offset
         try:
-            response = await collection.query.bm25(
+            response = await collection.query.hybrid(
                 query=query or "",
                 query_properties=[
                     "chunk_title",
@@ -271,7 +271,9 @@ class WeaviateVectorDB:
                     "message_content_gse",
                     "resource_tag_names_gse",
                 ],
-                # fusion_type=wvc.query.HybridFusion.RANKED,
+                fusion_type=wvc.query.HybridFusion.RANKED,
+                vector=vector,
+                alpha=0.5,
                 filters=condition.to_weaviate_filters(),
                 limit=search_limit,
                 return_metadata=wvc.query.MetadataQuery.full(),
