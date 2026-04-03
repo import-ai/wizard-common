@@ -229,7 +229,7 @@ class WeaviateVectorDB:
             inverted_index_config=wvc.config.Configure.inverted_index(
                 index_null_state=True,
                 bm25_b=0.75,
-                bm25_k1=0.6
+                bm25_k1=1.2,
             ),
             properties=required_properties,
         )
