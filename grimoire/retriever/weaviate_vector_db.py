@@ -91,7 +91,19 @@ class WeaviateVectorDB:
                 tokenization=wvc.config.Tokenization.FIELD,
             ),
             wvc.config.Property(
+                name="chunk_title_gse",
+                data_type=wvc.config.DataType.TEXT,
+                index_searchable=True,
+                tokenization=wvc.config.Tokenization.GSE_CH,
+            ),
+            wvc.config.Property(
                 name="chunk_title",
+                data_type=wvc.config.DataType.TEXT,
+                index_searchable=True,
+                tokenization=wvc.config.Tokenization.WORD,
+            ),
+            wvc.config.Property(
+                name="chunk_text_gse",
                 data_type=wvc.config.DataType.TEXT,
                 index_searchable=True,
                 tokenization=wvc.config.Tokenization.GSE_CH,
@@ -100,7 +112,7 @@ class WeaviateVectorDB:
                 name="chunk_text",
                 data_type=wvc.config.DataType.TEXT,
                 index_searchable=True,
-                tokenization=wvc.config.Tokenization.GSE_CH,
+                tokenization=wvc.config.Tokenization.WORD,
             ),
             wvc.config.Property(
                 name="chunk_resource_id",
@@ -121,10 +133,16 @@ class WeaviateVectorDB:
                 tokenization=wvc.config.Tokenization.FIELD,
             ),
             wvc.config.Property(
-                name="resource_tag_names",
+                name="resource_tag_names_gse",
                 data_type=wvc.config.DataType.TEXT_ARRAY,
                 index_searchable=True,
                 tokenization=wvc.config.Tokenization.GSE_CH,
+            ),
+            wvc.config.Property(
+                name="resource_tag_names",
+                data_type=wvc.config.DataType.TEXT_ARRAY,
+                index_searchable=True,
+                tokenization=wvc.config.Tokenization.WORD,
             ),
             wvc.config.Property(
                 name="chunk_type",
@@ -174,10 +192,16 @@ class WeaviateVectorDB:
                 tokenization=wvc.config.Tokenization.FIELD,
             ),
             wvc.config.Property(
-                name="message_content",
+                name="message_content_gse",
                 data_type=wvc.config.DataType.TEXT,
                 index_searchable=True,
                 tokenization=wvc.config.Tokenization.GSE_CH,
+            ),
+            wvc.config.Property(
+                name="message_content",
+                data_type=wvc.config.DataType.TEXT,
+                index_searchable=True,
+                tokenization=wvc.config.Tokenization.WORD,
             ),
         ]
 
@@ -240,6 +264,10 @@ class WeaviateVectorDB:
                     "chunk_text",
                     "message_content",
                     "resource_tag_names",
+                    "chunk_title_gse",
+                    "chunk_text_gse",
+                    "message_content_gse",
+                    "resource_tag_names_gse",
                 ],
                 # fusion_type=wvc.query.HybridFusion.RANKED,
                 filters=condition.to_weaviate_filters(),
@@ -346,11 +374,14 @@ class WeaviateVectorDB:
                     "namespace_id": namespace_id,
                 }
                 properties["chunk_title"] = chunk.title
+                properties["chunk_title_gse"] = chunk.title
                 properties["chunk_text"] = chunk.text
+                properties["chunk_text_gse"] = chunk.text
                 properties["chunk_resource_id"] = chunk.resource_id
                 properties["chunk_parent_id"] = chunk.parent_id
                 properties["resource_tag_ids"] = chunk.resource_tag_ids
                 properties["resource_tag_names"] = chunk.resource_tag_names
+                properties["resource_tag_names_gse"] = chunk.resource_tag_names
                 properties["chunk_type"] = chunk.chunk_type.value
                 properties["chunk_id"] = chunk.chunk_id
                 properties["chunk_created_at"] = chunk.created_at
@@ -393,6 +424,7 @@ class WeaviateVectorDB:
         properties["conversation_id"] = message.conversation_id
         properties["message_role"] = message.message.role
         properties["message_content"] = message_content
+        properties["message_content_gse"] = message_content
 
         await collection.data.insert(properties=properties, vector=vector)
 
