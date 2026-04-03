@@ -34,7 +34,7 @@ COLLECTION_NAME = "omnibox_index"
 
 
 class WeaviateVectorDB:
-    _english_letters_pattern = re.compile(r"[A-Za-z]+")
+    _english_letters_pattern = re.compile(r"[0-9A-Za-z]+")
     _whitespace_pattern = re.compile(r"\s+")
 
     def __init__(self, config: VectorConfig):
