@@ -179,7 +179,6 @@ class MeiliVectorDB:
             records = []
             for chunk, embed in zip(batch, embeddings.data):
                 record = IndexRecord(
-                    id="chunk_{}".format(chunk.chunk_id),
                     type=IndexRecordType.chunk,
                     namespace_id=namespace_id,
                     chunk=chunk,
@@ -187,7 +186,9 @@ class MeiliVectorDB:
                         self.embedder_name: embed.embedding,
                     },
                 )
-                records.append(record.model_dump(by_alias=True))
+                record_dict = record.model_dump(by_alias=True)
+                record_dict["id"] = "chunk_{}".format(chunk.chunk_id)
+                records.append(record_dict)
             tasks.append(await index.add_documents(records, primary_key="id"))
 
     @tracer.start_as_current_span("MeiliVectorDB.upsert_message")
@@ -211,7 +212,6 @@ class MeiliVectorDB:
             extra_headers=headers,
         )
         record = IndexRecord(
-            id=record_id,
             type=IndexRecordType.message,
             namespace_id=namespace_id,
             user_id=user_id,
@@ -220,8 +220,10 @@ class MeiliVectorDB:
                 self.embedder_name: embedding.data[0].embedding,
             },
         )
+        record_dict = record.model_dump(by_alias=True)
+        record_dict["id"] = record_id
         task = await index.add_documents(
-            [record.model_dump(by_alias=True)], primary_key="id"
+            [record_dict], primary_key="id"
         )
         tasks.append(task)
 
