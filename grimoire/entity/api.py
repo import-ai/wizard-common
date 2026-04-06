@@ -12,6 +12,8 @@ class BaseChatRequest(BaseModel):
 
 
 class ChatRequestOptions(BaseModel):
+    user_id: str | None = Field(default=None, description="User ID, required by resources operations")
+    namespace_id: str | None = Field(default=None, description="Namespace ID")
     tools: list[PrivateSearchTool | WebSearchTool] | None = Field(default=None)
     enable_thinking: bool | None = Field(default=None)
     merge_search: bool | None = Field(
@@ -26,7 +28,7 @@ class ChatRequestOptions(BaseModel):
 
 
 class MessageAttrs(ChatRequestOptions):
-    citations: list[Citation] = Field(default=None)
+    citations: list[Citation] | None = Field(default=None)
 
 
 class MessageDto(BaseModel):
@@ -35,6 +37,7 @@ class MessageDto(BaseModel):
 
 
 class AgentRequest(BaseChatRequest, ChatRequestOptions):
+    namespace_id: str = Field(description="Namespace ID")
     conversation_id: str
     messages: list[MessageDto] | None = Field(default=None)
 
