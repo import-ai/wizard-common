@@ -29,7 +29,7 @@ async def stream_wrapper(
         error, error_message = e, "Unknown error"
     if error:
         span.record_exception(error)
-        span.set_attribute("error_message", error_message)
+        span.set_attribute("error_message", error_message or "")
         trace_info.exception(
             {
                 "exception_class": error.__class__.__name__,

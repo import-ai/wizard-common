@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from wizard_common.grimoire.entity.retrieval import Citation
 from wizard_common.grimoire.entity.tools import PrivateSearchTool, WebSearchTool
 
+ChatRole = Literal["system", "user", "assistant", "tool"]
 
 class BaseChatRequest(BaseModel):
     query: str
@@ -44,11 +45,12 @@ class ChatBaseResponse(BaseModel):
 
 class ChatBOSResponse(ChatBaseResponse):
     response_type: Literal["bos"] = "bos"
-    role: Literal["system", "user", "assistant", "tool"]
+    role: ChatRole
 
 
 class ChatEOSResponse(ChatBaseResponse):
     response_type: Literal["eos"] = "eos"
+    role: ChatRole | None = Field(default=None)
 
 
 class DeltaOpenAIMessage(BaseModel):
