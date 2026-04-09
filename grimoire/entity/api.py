@@ -29,6 +29,8 @@ class ChatRequestOptions(BaseModel):
 
 class MessageAttrs(ChatRequestOptions):
     citations: list[Citation] | None = Field(default=None)
+    context: dict | None = Field(default=None)
+    tool_call: dict | None = Field(default=None)
 
 
 class MessageDto(BaseModel):
