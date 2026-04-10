@@ -44,7 +44,7 @@ class AgentRequest(BaseChatRequest, ChatRequestOptions):
 
 
 class ChatBaseResponse(BaseModel):
-    response_type: Literal["bos", "delta", "eos", "error", "done"]
+    response_type: Literal["bos", "delta", "eos", "error", "done", "checkpoint"]
 
 
 class ChatBOSResponse(ChatBaseResponse):
@@ -66,10 +66,14 @@ class DeltaOpenAIMessage(BaseModel):
 
 class ChatDeltaResponse(ChatBaseResponse):
     response_type: Literal["delta"] = "delta"
-    message: DeltaOpenAIMessage
+    message: DeltaOpenAIMessage = Field(default_factory=DeltaOpenAIMessage)
     attrs: MessageAttrs | None = Field(
         default=None, description="Attributes of the message."
     )
+
+class ChatCheckpointResponse(ChatBaseResponse):
+    response_type: Literal["checkpoint"] = "checkpoint"
+    checkpoint: dict
 
 
 class ChatCitationsResponse(ChatBaseResponse):
