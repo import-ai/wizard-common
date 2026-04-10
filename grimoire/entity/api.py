@@ -23,12 +23,12 @@ class ChatRequestOptions(BaseModel):
     lang: Literal["简体中文", "English"] | None = Field(
         default=None, description="Language of the response."
     )
+    tool_call: dict | None = Field(default=None)
 
 
 class MessageAttrs(ChatRequestOptions):
     citations: list[Citation] | None = Field(default=None)
     context: dict | None = Field(default=None)
-    tool_call: dict | None = Field(default=None)
 
 
 class MessageDto(BaseModel):
