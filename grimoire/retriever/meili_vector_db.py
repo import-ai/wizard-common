@@ -222,9 +222,7 @@ class MeiliVectorDB:
         )
         record_dict = record.model_dump(by_alias=True)
         record_dict["id"] = record_id
-        task = await index.add_documents(
-            [record_dict], primary_key="id"
-        )
+        task = await index.add_documents([record_dict], primary_key="id")
         tasks.append(task)
 
     @tracer.start_as_current_span("MeiliVectorDB.remove_conversation")

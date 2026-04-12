@@ -24,7 +24,6 @@ from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
 import weaviate
 import weaviate.classes as wvc
 from weaviate.exceptions import (
-    UnexpectedStatusCodeError,
     WeaviateDeleteManyError,
     WeaviateQueryError,
 )
@@ -387,9 +386,7 @@ class WeaviateVectorDB:
                     "namespace_id": namespace_id,
                 }
                 properties["chunk_title"] = chunk.title
-                properties["chunk_title_gse"] = self._strip_english_letters(
-                    chunk.title
-                )
+                properties["chunk_title_gse"] = self._strip_english_letters(chunk.title)
                 properties["chunk_text"] = chunk.text
                 properties["chunk_text_gse"] = self._strip_english_letters(chunk.text)
                 properties["chunk_resource_id"] = chunk.resource_id
@@ -442,9 +439,7 @@ class WeaviateVectorDB:
         properties["conversation_id"] = message.conversation_id
         properties["message_role"] = message.message.role
         properties["message_content"] = message_content
-        properties["message_content_gse"] = self._strip_english_letters(
-            message_content
-        )
+        properties["message_content_gse"] = self._strip_english_letters(message_content)
 
         await collection.data.insert(properties=properties, vector=vector)
 
@@ -452,7 +447,7 @@ class WeaviateVectorDB:
     async def remove_conversation(self, namespace_id: str, conversation_id: str):
         collection = await self._get_shard(namespace_id)
         try:
-            ret = await collection.data.delete_many(
+            await collection.data.delete_many(
                 where=wvc.query.Filter.by_property("type").equal(
                     IndexRecordType.message.value
                 )
@@ -467,7 +462,7 @@ class WeaviateVectorDB:
     async def remove_chunks(self, namespace_id: str, resource_id: str):
         collection = await self._get_shard(namespace_id)
         try:
-            ret = await collection.data.delete_many(
+            await collection.data.delete_many(
                 where=wvc.query.Filter.by_property("type").equal(
                     IndexRecordType.chunk.value
                 )

@@ -47,7 +47,7 @@ def retrieval_wrapper(tool_call_id: str, retrievals: list[BaseRetrieval]) -> Mes
                 "citations": [retrieval.to_citation() for retrieval in retrievals],
                 "tool_call": {
                     "status": "success",
-                }
+                },
             },
         }
     )

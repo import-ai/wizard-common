@@ -7,6 +7,7 @@ from wizard_common.grimoire.entity.tools import PrivateSearchTool, WebSearchTool
 
 ChatRole = Literal["system", "user", "assistant", "tool"]
 
+
 class BaseChatRequest(BaseModel):
     query: str
 
@@ -70,6 +71,7 @@ class ChatDeltaResponse(ChatBaseResponse):
     attrs: MessageAttrs | None = Field(
         default=None, description="Attributes of the message."
     )
+
 
 class ChatCheckpointResponse(ChatBaseResponse):
     response_type: Literal["checkpoint"] = "checkpoint"
