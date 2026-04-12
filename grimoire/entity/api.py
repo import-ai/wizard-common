@@ -30,6 +30,7 @@ class ChatRequestOptions(BaseModel):
 class MessageAttrs(ChatRequestOptions):
     citations: list[Citation] | None = Field(default=None)
     context: dict | None = Field(default=None)
+    user_context: dict | None = Field(default=None)
 
 
 class MessageDto(BaseModel):
