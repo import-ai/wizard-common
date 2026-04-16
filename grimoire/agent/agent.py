@@ -248,7 +248,9 @@ class UserQueryPreprocessor:
 
 class BaseSearchableAgent(BaseStreamable, ABC):
     def __init__(self, config: GrimoireAgentConfig):
-        self.knowledge_database_retriever = WeaviateVectorRetriever(config=config.vector)
+        self.knowledge_database_retriever = WeaviateVectorRetriever(
+            config=config.vector
+        )
         self.web_search_retriever = SearXNG(
             base_url=config.tools.searxng.base_url, engines=config.tools.searxng.engines
         )

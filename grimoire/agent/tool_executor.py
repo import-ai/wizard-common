@@ -28,9 +28,9 @@ def cmp(retrieval: BaseRetrieval) -> tuple[int, str, int, float]:
     if isinstance(
         retrieval, ResourceChunkRetrieval
     ):  # GROUP BY resource_id ORDER BY start_index ASC
-        return 0, retrieval.chunk.resource_id, retrieval.chunk.start_index, 0.0
+        return 0, retrieval.chunk.resource_id, retrieval.chunk.start_index or 0, 0.0
     elif isinstance(retrieval, SearXNGRetrieval):  # ORDER BY score.rerank DESC
-        return 1, "", 0, -retrieval.score.rerank
+        return 1, "", 0, -(retrieval.score.rerank or 0.0)
     raise ValueError(f"Unknown retrieval type: {type(retrieval)}")
 
 
@@ -44,7 +44,10 @@ def retrieval_wrapper(tool_call_id: str, retrievals: list[BaseRetrieval]) -> Mes
                 "content": content,
             },
             "attrs": {
-                "citations": [retrieval.to_citation() for retrieval in retrievals]
+                "citations": [retrieval.to_citation() for retrieval in retrievals],
+                "tool_call": {
+                    "status": "success",
+                },
             },
         }
     )

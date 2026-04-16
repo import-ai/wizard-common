@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 from wizard_common.grimoire.entity.retrieval import Citation
 from wizard_common.grimoire.entity.tools import PrivateSearchTool, WebSearchTool
 
+ChatRole = Literal["system", "user", "assistant", "tool"]
+
 
 class BaseChatRequest(BaseModel):
     query: str
@@ -22,10 +24,13 @@ class ChatRequestOptions(BaseModel):
     lang: Literal["简体中文", "English"] | None = Field(
         default=None, description="Language of the response."
     )
+    tool_call: dict | None = Field(default=None)
 
 
 class MessageAttrs(ChatRequestOptions):
-    citations: list[Citation] = Field(default=None)
+    citations: list[Citation] | None = Field(default=None)
+    context: dict | None = Field(default=None)
+    user_context: dict | None = Field(default=None)
 
 
 class MessageDto(BaseModel):
@@ -34,21 +39,24 @@ class MessageDto(BaseModel):
 
 
 class AgentRequest(BaseChatRequest, ChatRequestOptions):
+    user_id: str = Field(description="User ID")
+    namespace_id: str = Field(description="Namespace ID")
     conversation_id: str
     messages: list[MessageDto] | None = Field(default=None)
 
 
 class ChatBaseResponse(BaseModel):
-    response_type: Literal["bos", "delta", "eos", "error", "done"]
+    response_type: Literal["bos", "delta", "eos", "error", "done", "checkpoint"]
 
 
 class ChatBOSResponse(ChatBaseResponse):
     response_type: Literal["bos"] = "bos"
-    role: Literal["system", "user", "assistant", "tool"]
+    role: ChatRole
 
 
 class ChatEOSResponse(ChatBaseResponse):
     response_type: Literal["eos"] = "eos"
+    role: ChatRole | None = Field(default=None)
 
 
 class DeltaOpenAIMessage(BaseModel):
@@ -60,10 +68,15 @@ class DeltaOpenAIMessage(BaseModel):
 
 class ChatDeltaResponse(ChatBaseResponse):
     response_type: Literal["delta"] = "delta"
-    message: DeltaOpenAIMessage
+    message: DeltaOpenAIMessage = Field(default_factory=DeltaOpenAIMessage)
     attrs: MessageAttrs | None = Field(
         default=None, description="Attributes of the message."
     )
+
+
+class ChatCheckpointResponse(ChatBaseResponse):
+    response_type: Literal["checkpoint"] = "checkpoint"
+    checkpoint: dict
 
 
 class ChatCitationsResponse(ChatBaseResponse):

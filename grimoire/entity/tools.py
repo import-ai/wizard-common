@@ -1,6 +1,16 @@
 from enum import Enum
 from functools import partial
-from typing import List, Literal, Callable, TypedDict, Awaitable, Union, get_args, cast, Any
+from typing import (
+    List,
+    Literal,
+    Callable,
+    TypedDict,
+    Awaitable,
+    Union,
+    get_args,
+    cast,
+    Any,
+)
 
 from opentelemetry import trace
 from pydantic import BaseModel, Field
@@ -27,10 +37,7 @@ class Condition(BaseModel):
 
         if self.user_id:
             and_clause.append(
-                [
-                    'user_id IS NULL',
-                    'user_id = "{}"'.format(self.user_id)
-                ]
+                ["user_id IS NULL", 'user_id = "{}"'.format(self.user_id)]
             )
 
         if self.record_type:
@@ -74,26 +81,30 @@ class Condition(BaseModel):
             where = where & wvc.query.Filter.by_property("type").equal(self.record_type)
 
         if self.resource_ids:
-            where = where & wvc.query.Filter.by_property("chunk_resource_id").contains_any(self.resource_ids)
+            where = where & wvc.query.Filter.by_property(
+                "chunk_resource_id"
+            ).contains_any(self.resource_ids)
 
         if self.parent_ids:
-            where = where & wvc.query.Filter.by_property("chunk_parent_id").contains_any(self.parent_ids)
+            where = where & wvc.query.Filter.by_property(
+                "chunk_parent_id"
+            ).contains_any(self.parent_ids)
 
         if self.created_at is not None:
-            where = where & wvc.query.Filter.by_property("chunk_created_at").greater_or_equal(
-                self.created_at[0]
-            )
-            where = where & wvc.query.Filter.by_property("chunk_created_at").less_or_equal(
-                self.created_at[1]
-            )
+            where = where & wvc.query.Filter.by_property(
+                "chunk_created_at"
+            ).greater_or_equal(self.created_at[0])
+            where = where & wvc.query.Filter.by_property(
+                "chunk_created_at"
+            ).less_or_equal(self.created_at[1])
 
         if self.updated_at is not None:
-            where = where & wvc.query.Filter.by_property("chunk_updated_at").greater_or_equal(
-                self.updated_at[0]
-            )
-            where = where & wvc.query.Filter.by_property("chunk_updated_at").less_or_equal(
-                self.updated_at[1]
-            )
+            where = where & wvc.query.Filter.by_property(
+                "chunk_updated_at"
+            ).greater_or_equal(self.updated_at[0])
+            where = where & wvc.query.Filter.by_property(
+                "chunk_updated_at"
+            ).less_or_equal(self.updated_at[1])
 
         return where
 
