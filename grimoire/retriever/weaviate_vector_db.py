@@ -590,7 +590,6 @@ class WeaviateVectorRetriever(BaseRetriever):
         ]
         trace_info and trace_info.debug(
             {
-                "where": condition.to_weaviate_filters(),
                 "condition": condition.model_dump() if condition else condition,
                 "len(retrievals)": len(retrievals),
             }
