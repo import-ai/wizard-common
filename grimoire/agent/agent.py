@@ -388,6 +388,8 @@ class Agent(BaseSearchableAgent):
                 yield ChatBOSResponse(role="assistant")
 
                 async for chunk in openai_response:
+                    if not chunk.choices:
+                        continue
                     delta = chunk.choices[0].delta
                     chunks.append(chunk.model_dump(exclude_none=True))
                     if ttft < 0:
