@@ -39,7 +39,8 @@ class MessageDto(BaseModel):
 
 
 class AgentRequest(BaseChatRequest, ChatRequestOptions):
-    user_id: str = Field(description="User ID")
+    user_id: str | None = Field(default=None, description="User ID")
+    share_id: str | None = Field(default=None, description="Share ID")
     namespace_id: str = Field(description="Namespace ID")
     conversation_id: str
     messages: list[MessageDto] | None = Field(default=None)
