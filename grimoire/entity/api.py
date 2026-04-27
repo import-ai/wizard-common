@@ -47,7 +47,9 @@ class AgentRequest(BaseChatRequest, ChatRequestOptions):
 
 
 class ChatBaseResponse(BaseModel):
-    response_type: Literal["bos", "delta", "eos", "error", "done", "checkpoint", "metrics"]
+    response_type: Literal[
+        "bos", "delta", "eos", "error", "done", "checkpoint", "metrics"
+    ]
 
 
 class ChatBOSResponse(ChatBaseResponse):

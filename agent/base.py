@@ -1,6 +1,6 @@
 import json as jsonlib
 import re
-from typing import Type, TypeVar, Generic, AsyncIterator
+from typing import Type, TypeVar, Generic, AsyncIterator, Literal
 
 from jinja2 import Template
 from openai import AsyncStream
@@ -12,6 +12,7 @@ from common import project_root
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 from wizard_common.config import OpenAIConfig
+from wizard_common.grimoire.config import GrimoireOpenAIConfig
 
 InputType = TypeVar("InputType", bound=BaseModel)
 OutputType = TypeVar("OutputType")
@@ -92,20 +93,35 @@ class BaseAgent(Generic[InputType, OutputType]):
 
     def __init__(
         self,
-        openai_config: OpenAIConfig,
+        config: GrimoireOpenAIConfig,
         input_class: Type[InputType],
         output_class: Type[OutputType],
         *,
         system_prompt_template: Template | str,
         user_prompt_template: Template | str | None = None,
         examples: ExamplesType = None,
+        model_size: Literal["mini", "default", "large"] = "mini",
+        enable_thinking: bool = False,
     ):
+        self.kwargs: dict = {}
+        openai_config = config.get_config(model_size, default=config.default)
+        if enable_thinking and (
+            openai_thinking := config.get_config(
+                model_size, thinking=True, default=None
+            )
+        ):
+            openai_config = openai_thinking
+        else:
+            self.kwargs["extra_body"] = {"enable_thinking": enable_thinking}
+
+        assert openai_config is not None, "OpenAI config not provided."
+
         self.input_class: Type[InputType] = input_class
         self.output_class: Type[OutputType] = output_class
 
-        self.system_prompt_template: Template = self.get_template(
-            system_prompt_template
-        )
+        template = self.get_template(system_prompt_template)
+        assert template is not None, "Template not provided."
+        self.system_prompt_template: Template = template
 
         self.user_prompt_template: Template | None = (
             self.get_template(user_prompt_template) if user_prompt_template else None
@@ -236,6 +252,7 @@ class BaseAgent(Generic[InputType, OutputType]):
             messages=messages,
             stream=True,
             extra_headers=headers if headers else None,
+            **self.kwargs,
         )
         async for chunk in openai_async_stream_response:
             if not chunk.choices:
@@ -243,21 +260,3 @@ class BaseAgent(Generic[InputType, OutputType]):
             if delta := chunk.choices[0].delta.content:
                 response += delta
                 yield delta
-
-    @classmethod
-    def create_agent(
-        cls,
-        openai_config: OpenAIConfig,
-        input_class: Type[InputType],
-        output_class: Type[OutputType],
-        *,
-        system_prompt_template: Template | str,
-        examples: ExamplesType = None,
-    ) -> "BaseAgent[InputType, OutputType]":
-        return cls(
-            openai_config,
-            input_class,
-            output_class,
-            system_prompt_template=system_prompt_template,
-            examples=examples,
-        )
