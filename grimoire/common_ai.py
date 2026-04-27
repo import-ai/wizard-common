@@ -1,7 +1,7 @@
 from opentelemetry import trace
 
 from wizard_common.grimoire.config import GrimoireOpenAIConfig
-from worker.agent.chat_title_generator import (
+from omnibox_wizard.worker.agent.chat_title_generator import (
     ChatTitleGenerator,
     ChatTitleGenerateOutput,
 )

@@ -1,6 +1,6 @@
 import json as jsonlib
 import re
-from typing import Type, TypeVar, Generic, AsyncIterator, Literal
+from typing import Type, TypeVar, Generic, AsyncIterator
 
 from jinja2 import Template
 from openai import AsyncStream
@@ -12,7 +12,7 @@ from common import project_root
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 from wizard_common.config import OpenAIConfig
-from wizard_common.grimoire.config import GrimoireOpenAIConfig
+from wizard_common.grimoire.config import GrimoireOpenAIConfig, GrimoireOpenAIConfigKey
 
 InputType = TypeVar("InputType", bound=BaseModel)
 OutputType = TypeVar("OutputType")
@@ -100,7 +100,7 @@ class BaseAgent(Generic[InputType, OutputType]):
         system_prompt_template: Template | str,
         user_prompt_template: Template | str | None = None,
         examples: ExamplesType = None,
-        model_size: Literal["mini", "default", "large"] = "mini",
+        model_size: GrimoireOpenAIConfigKey = "mini",
         enable_thinking: bool = False,
     ):
         self.kwargs: dict = {}
