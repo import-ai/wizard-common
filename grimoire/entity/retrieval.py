@@ -123,9 +123,12 @@ class PromptCite(PromptContext, ABC):
     @field_validator("id", mode="before")
     @classmethod
     def validate_id(cls, value) -> str:
-        if value is None or value == -1:
+        if value is None:
             return ""
-        return str(value)
+        citation_id = str(value)
+        if citation_id.lstrip("-").isdigit():
+            return ""
+        return citation_id
 
     @abstractmethod
     def to_prompt(self, exclude_id: bool = False) -> str:
@@ -144,8 +147,9 @@ class Citation(PromptCite):
         attrs: dict = self.model_dump(
             exclude_none=True, exclude={"snippet", "link", "id"}
         )
-        if not exclude_id and self.id:
-            attrs["cite_marker"] = format_cite_marker(self.id)
+        cite_marker = "" if exclude_id else format_cite_marker(self.id)
+        if cite_marker:
+            attrs["cite_marker"] = cite_marker
         if (
             self.link
             and self.link.startswith("http")
@@ -155,7 +159,7 @@ class Citation(PromptCite):
         return to_prompt(
             attrs,
             self.model_dump(exclude_none=True, include={"snippet"}),
-            i=None if exclude_id else self.id,
+            i=self.id if cite_marker else None,
         )
 
 

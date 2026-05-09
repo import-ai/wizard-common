@@ -101,9 +101,10 @@ class ResourceChunkRetrieval(BaseRetrieval):
             tag_attrs["start_index"] = str(self.chunk.start_index)
         if self.chunk.end_index is not None:
             tag_attrs["end_index"] = str(self.chunk.end_index)
-        if not exclude_id and self.id:
-            tag_attrs["cite_marker"] = format_cite_marker(self.id)
-        return to_prompt(tag_attrs, body_attrs, i=None if exclude_id else self.id)
+        cite_marker = "" if exclude_id else format_cite_marker(self.id)
+        if cite_marker:
+            tag_attrs["cite_marker"] = cite_marker
+        return to_prompt(tag_attrs, body_attrs, i=self.id if cite_marker else None)
 
     def to_citation(self) -> Citation:
         return Citation(
