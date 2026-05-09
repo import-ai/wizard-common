@@ -1,13 +1,100 @@
 from abc import abstractmethod, ABC
+import re
+import unicodedata
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from common.utils import remove_continuous_break_lines
 
 
+CITATION_ID_PATTERN = re.compile(r"^C(\d+)(?:-|$)")
+TOKEN_PATTERN = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]{2,12}")
+STOP_WORDS = {
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "for",
+    "with",
+    "on",
+    "by",
+    "from",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "this",
+    "that",
+    "these",
+    "those",
+    "doc",
+    "docs",
+    "document",
+    "file",
+    "md",
+    "markdown",
+    "html",
+    "www",
+    "com",
+    "org",
+    "net",
+    "final",
+    "draft",
+    "copy",
+    "version",
+    "revised",
+    "updated",
+    "untitled",
+    "source",
+}
+
+
 def get_domain(url: str) -> str:
     return urlparse(url).netloc
+
+
+def make_citation_slug(
+    title: str | None,
+    snippet: str | None,
+    *,
+    max_tokens: int = 3,
+    max_length: int = 40,
+) -> str:
+    text = unicodedata.normalize("NFKC", f"{title or ''} {snippet or ''}").lower()
+    tokens: list[str] = []
+    for token in TOKEN_PATTERN.findall(text):
+        if token in STOP_WORDS or token.isdigit() or len(token) <= 1 or token in tokens:
+            continue
+        tokens.append(token)
+    if not tokens:
+        return "source"
+    slug = "-".join(tokens[:max_tokens])[:max_length].strip("-")
+    return slug or "source"
+
+
+def make_citation_id(
+    index: int,
+    title: str | None,
+    snippet: str | None,
+    line_range: str | None = None,
+) -> str:
+    citation_id = f"C{index}-{make_citation_slug(title, snippet)}"
+    if line_range:
+        citation_id = f"{citation_id}-L{line_range}"
+    return citation_id
+
+
+def format_cite_marker(citation_id: str) -> str:
+    match = CITATION_ID_PATTERN.match(citation_id)
+    if not match:
+        return ""
+    return f"[[{match.group(1)}]]({citation_id})"
 
 
 class PromptContext(BaseModel, ABC):
@@ -17,9 +104,9 @@ class PromptContext(BaseModel, ABC):
 
 
 def to_prompt(
-    tag_attrs: dict, body_attrs: dict, i: int | None = None, tag_name: str = "cite"
+    tag_attrs: dict, body_attrs: dict, i: str | None = None, tag_name: str = "cite"
 ) -> str:
-    if i is not None:
+    if i:
         tag_attrs = {"id": str(i)} | tag_attrs
     header_attrs: str = " ".join([f'{k}="{v}"' for k, v in tag_attrs.items() if v])
     contents: list[str] = [
@@ -31,7 +118,14 @@ def to_prompt(
 
 
 class PromptCite(PromptContext, ABC):
-    id: int = Field(default=-1)
+    id: str = Field(default="")
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def validate_id(cls, value) -> str:
+        if value is None or value == -1:
+            return ""
+        return str(value)
 
     @abstractmethod
     def to_prompt(self, exclude_id: bool = False) -> str:
@@ -45,10 +139,13 @@ class Citation(PromptCite):
     updated_at: str | None = None
     source: str | None = None
     namespace_id: str | None = None
-    cite_ref: str | None = None
 
     def to_prompt(self, exclude_id: bool = False) -> str:
-        attrs: dict = self.model_dump(exclude_none=True, exclude={"snippet", "link"})
+        attrs: dict = self.model_dump(
+            exclude_none=True, exclude={"snippet", "link", "id"}
+        )
+        if not exclude_id and self.id:
+            attrs["cite_marker"] = format_cite_marker(self.id)
         if (
             self.link
             and self.link.startswith("http")
@@ -83,7 +180,7 @@ class BaseRetrieval(PromptCite):
 
 def retrievals2prompt(retrievals: list[PromptCite]) -> str:
     retrieval_prompt_list: list[str] = []
-    for i, retrieval in enumerate(retrievals):
+    for retrieval in retrievals:
         retrieval_prompt_list.append(retrieval.to_prompt())
     if retrieval_prompt_list:
         retrieval_prompt: str = "\n\n".join(retrieval_prompt_list)
