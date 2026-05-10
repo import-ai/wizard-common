@@ -3,13 +3,16 @@ import re
 import unicodedata
 from urllib.parse import urlparse
 
+from anyascii import anyascii
 from pydantic import BaseModel, Field, field_validator
+from pypinyin import lazy_pinyin
 
 from common.utils import remove_continuous_break_lines
 
 
 CITATION_ID_PATTERN = re.compile(r"^C(\d+)(?:-|$)")
-TOKEN_PATTERN = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]{2,12}")
+HAN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
+TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 STOP_WORDS = {
     "the",
     "a",
@@ -55,6 +58,14 @@ STOP_WORDS = {
 }
 
 
+def transliterate_to_ascii(text: str) -> str:
+    def replace_han(match: re.Match[str]) -> str:
+        return " " + " ".join(lazy_pinyin(match.group(0), errors="ignore")) + " "
+
+    text = HAN_PATTERN.sub(replace_han, text)
+    return anyascii(text)
+
+
 def get_domain(url: str) -> str:
     return urlparse(url).netloc
 
@@ -66,7 +77,8 @@ def make_citation_slug(
     max_tokens: int = 3,
     max_length: int = 40,
 ) -> str:
-    text = unicodedata.normalize("NFKC", f"{title or ''} {snippet or ''}").lower()
+    text = unicodedata.normalize("NFKC", f"{title or ''} {snippet or ''}")
+    text = transliterate_to_ascii(text).lower()
     tokens: list[str] = []
     for token in TOKEN_PATTERN.findall(text):
         if token in STOP_WORDS or token.isdigit() or len(token) <= 1 or token in tokens:
