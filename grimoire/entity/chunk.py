@@ -54,6 +54,9 @@ class Chunk(PromptContext):
     end_index: Optional[int] = Field(
         description="The end char index of this chunk, index excluded", default=None
     )
+    line_range: Optional[str] = Field(
+        description="The source line range of this chunk", default=None
+    )
 
     @property
     def metadata(self) -> dict:
@@ -101,6 +104,8 @@ class ResourceChunkRetrieval(BaseRetrieval):
             tag_attrs["start_index"] = str(self.chunk.start_index)
         if self.chunk.end_index is not None:
             tag_attrs["end_index"] = str(self.chunk.end_index)
+        if self.chunk.line_range:
+            tag_attrs["line_range"] = self.chunk.line_range
         cite_marker = "" if exclude_id else format_cite_marker(self.id)
         if cite_marker:
             tag_attrs["cite_marker"] = cite_marker

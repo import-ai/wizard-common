@@ -121,10 +121,16 @@ class ToolExecutor:
                         sorted_retrievals = sorted(result, key=cmp)
                         for i, r in enumerate(sorted_retrievals):
                             citation = r.to_citation()
+                            line_range = (
+                                r.chunk.line_range
+                                if isinstance(r, ResourceChunkRetrieval)
+                                else None
+                            )
                             r.id = make_citation_id(
                                 current_cite_cnt + i + 1,
                                 citation.title,
                                 citation.snippet,
+                                line_range,
                             )
                         message_dto: MessageDto = retrieval_wrapper(
                             tool_call_id=tool_call_id, retrievals=sorted_retrievals

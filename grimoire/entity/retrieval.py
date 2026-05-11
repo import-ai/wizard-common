@@ -90,6 +90,28 @@ def make_citation_slug(
     return slug or "source"
 
 
+def char_range_to_line_range(
+    content: str, start_index: int | None, end_index: int | None
+) -> dict[str, int] | None:
+    if start_index is None or end_index is None:
+        return None
+
+    content_length = len(content)
+    start = min(max(start_index, 0), content_length)
+    end = min(max(end_index, start), content_length)
+    end_for_line = max(start, end - 1)
+
+    start_line = content.count("\n", 0, start) + 1
+    end_line = content.count("\n", 0, end_for_line) + 1
+    return {"start": start_line, "end": end_line}
+
+
+def format_line_range(line_range: dict[str, int] | None) -> str | None:
+    if line_range is None:
+        return None
+    return f"{line_range['start']}-{line_range['end']}"
+
+
 def make_citation_id(
     index: int,
     title: str | None,

@@ -166,6 +166,11 @@ class WeaviateVectorDB:
                 data_type=wvc.config.DataType.INT,
             ),
             wvc.config.Property(
+                name="chunk_line_range",
+                data_type=wvc.config.DataType.TEXT,
+                tokenization=wvc.config.Tokenization.FIELD,
+            ),
+            wvc.config.Property(
                 name="chunk_created_at",
                 data_type=wvc.config.DataType.NUMBER,
                 index_filterable=True,
@@ -328,6 +333,7 @@ class WeaviateVectorDB:
             updated_at=doc["chunk_updated_at"],
             start_index=doc.get("chunk_start_index"),
             end_index=doc.get("chunk_end_index"),
+            line_range=doc.get("chunk_line_range"),
             resource_tag_ids=doc.get("resource_tag_ids") or [],
             resource_tag_names=doc.get("resource_tag_names") or [],
         )
@@ -403,6 +409,7 @@ class WeaviateVectorDB:
                 properties["chunk_updated_at"] = chunk.updated_at
                 properties["chunk_start_index"] = chunk.start_index
                 properties["chunk_end_index"] = chunk.end_index
+                properties["chunk_line_range"] = chunk.line_range
                 objects.append(
                     wvc.data.DataObject(
                         properties=properties,
