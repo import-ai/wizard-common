@@ -16,6 +16,7 @@ from wizard_common.grimoire.entity.api import (
 from wizard_common.grimoire.entity.chunk import ResourceChunkRetrieval
 from wizard_common.grimoire.entity.retrieval import (
     BaseRetrieval,
+    make_citation_id,
     retrievals2prompt,
 )
 from wizard_common.grimoire.entity.tools import ToolExecutorConfig
@@ -119,7 +120,18 @@ class ToolExecutor:
                         )
                         sorted_retrievals = sorted(result, key=cmp)
                         for i, r in enumerate(sorted_retrievals):
-                            r.id = current_cite_cnt + i + 1
+                            citation = r.to_citation()
+                            line_range = (
+                                r.chunk.line_range
+                                if isinstance(r, ResourceChunkRetrieval)
+                                else None
+                            )
+                            r.id = make_citation_id(
+                                current_cite_cnt + i + 1,
+                                citation.title,
+                                citation.snippet,
+                                line_range,
+                            )
                         message_dto: MessageDto = retrieval_wrapper(
                             tool_call_id=tool_call_id, retrievals=sorted_retrievals
                         )
