@@ -24,6 +24,7 @@ class TaskFunction(StrEnum):
     EXTRACT_TAGS = "extract_tags"
     GENERATE_TITLE = "generate_title"
     GENERATE_VIDEO_NOTE = "generate_video_note"
+    GENERATE_AUDIO_NOTE = "generate_audio_note"
 
 
 class NextTaskResponseDto(BaseModel):
