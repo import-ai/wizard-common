@@ -32,6 +32,7 @@ class MessageAttrs(ChatRequestOptions):
     context: dict | None = Field(default=None)
     compact: dict | None = Field(default=None)
     user_context: dict | None = Field(default=None)
+    usage: dict | None = Field(default=None)
 
 
 class MessageDto(BaseModel):
