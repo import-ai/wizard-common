@@ -13,49 +13,6 @@ from common.utils import remove_continuous_break_lines
 CITATION_ID_PATTERN = re.compile(r"^C(\d+)(?:-|$)")
 HAN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
-STOP_WORDS = {
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "of",
-    "to",
-    "in",
-    "for",
-    "with",
-    "on",
-    "by",
-    "from",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "this",
-    "that",
-    "these",
-    "those",
-    "doc",
-    "docs",
-    "document",
-    "file",
-    "md",
-    "markdown",
-    "html",
-    "www",
-    "com",
-    "org",
-    "net",
-    "final",
-    "draft",
-    "copy",
-    "version",
-    "revised",
-    "updated",
-    "untitled",
-    "source",
-}
 
 
 def transliterate_to_ascii(text: str) -> str:
@@ -81,7 +38,7 @@ def make_citation_slug(
     text = transliterate_to_ascii(text).lower()
     tokens: list[str] = []
     for token in TOKEN_PATTERN.findall(text):
-        if token in STOP_WORDS or token.isdigit() or len(token) <= 1 or token in tokens:
+        if token.isdigit() or len(token) <= 1 or token in tokens:
             continue
         tokens.append(token)
     if not tokens:
