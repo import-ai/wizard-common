@@ -385,52 +385,59 @@ class Agent(BaseSearchableAgent):
                     **kwargs,
                 )
 
-                yield ChatBOSResponse(role="assistant")
+                try:
+                    yield ChatBOSResponse(role="assistant")
 
-                async for chunk in openai_response:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    chunks.append(chunk.model_dump(exclude_none=True))
-                    if ttft < 0:
-                        ttft = time.time() - start_time
-                        openai_span.set_attribute("ttft", ttft)
+                    async for chunk in openai_response:
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        chunks.append(chunk.model_dump(exclude_none=True))
+                        if ttft < 0:
+                            ttft = time.time() - start_time
+                            openai_span.set_attribute("ttft", ttft)
 
-                    if delta.tool_calls:
-                        tool_call: ChoiceDeltaToolCall = delta.tool_calls[0]
-                        if tool_call.index + 1 > len(
-                            assistant_message.get("tool_calls", [])
-                        ):
-                            assistant_message.setdefault("tool_calls", []).append({})
-                        if tool_call.id:
-                            assistant_message["tool_calls"][tool_call.index]["id"] = (
-                                tool_call.id
-                            )
-                        if tool_call.type:
-                            assistant_message["tool_calls"][tool_call.index]["type"] = (
-                                tool_call.type
-                            )
-                        if tool_call.function:
-                            function = tool_call.function
-                            function_dict: dict = assistant_message["tool_calls"][
-                                tool_call.index
-                            ].setdefault("function", {})
-                            if function.name:
-                                function_dict["name"] = (
-                                    function_dict.get("name", "") + function.name
+                        if delta.tool_calls:
+                            tool_call: ChoiceDeltaToolCall = delta.tool_calls[0]
+                            if tool_call.index + 1 > len(
+                                assistant_message.get("tool_calls", [])
+                            ):
+                                assistant_message.setdefault("tool_calls", []).append(
+                                    {}
                                 )
-                            if function.arguments:
-                                function_dict["arguments"] = (
-                                    function_dict.get("arguments", "")
-                                    + function.arguments
-                                )
+                            if tool_call.id:
+                                assistant_message["tool_calls"][tool_call.index][
+                                    "id"
+                                ] = tool_call.id
+                            if tool_call.type:
+                                assistant_message["tool_calls"][tool_call.index][
+                                    "type"
+                                ] = tool_call.type
+                            if tool_call.function:
+                                function = tool_call.function
+                                function_dict: dict = assistant_message["tool_calls"][
+                                    tool_call.index
+                                ].setdefault("function", {})
+                                if function.name:
+                                    function_dict["name"] = (
+                                        function_dict.get("name", "") + function.name
+                                    )
+                                if function.arguments:
+                                    function_dict["arguments"] = (
+                                        function_dict.get("arguments", "")
+                                        + function.arguments
+                                    )
 
-                    for key in ["content", "reasoning_content"]:
-                        if hasattr(delta, key) and (v := getattr(delta, key)):
-                            assistant_message[key] = assistant_message.get(key, "") + v
-                            yield ChatDeltaResponse.model_validate(
-                                {"message": {key: v}}
-                            )
+                        for key in ["content", "reasoning_content"]:
+                            if hasattr(delta, key) and (v := getattr(delta, key)):
+                                assistant_message[key] = (
+                                    assistant_message.get(key, "") + v
+                                )
+                                yield ChatDeltaResponse.model_validate(
+                                    {"message": {key: v}}
+                                )
+                finally:
+                    await openai_response.close()
 
             if tool_calls := assistant_message.get("tool_calls"):
                 yield ChatDeltaResponse.model_validate(

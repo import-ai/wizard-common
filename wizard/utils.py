@@ -27,6 +27,9 @@ async def stream_wrapper(
         error, error_message = e, "Inappropriate content"
     except Exception as e:
         error, error_message = e, "Unknown error"
+    finally:
+        if aclose := getattr(stream, "aclose", None):
+            await aclose()
     if error:
         span.record_exception(error)
         span.set_attribute("error_message", error_message or "")
