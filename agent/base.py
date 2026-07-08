@@ -254,9 +254,12 @@ class BaseAgent(Generic[InputType, OutputType]):
             extra_headers=headers if headers else None,
             **self.kwargs,
         )
-        async for chunk in openai_async_stream_response:
-            if not chunk.choices:
-                continue
-            if delta := chunk.choices[0].delta.content:
-                response += delta
-                yield delta
+        try:
+            async for chunk in openai_async_stream_response:
+                if not chunk.choices:
+                    continue
+                if delta := chunk.choices[0].delta.content:
+                    response += delta
+                    yield delta
+        finally:
+            await openai_async_stream_response.close()

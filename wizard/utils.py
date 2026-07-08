@@ -21,24 +21,28 @@ async def stream_wrapper(
     error: Exception | None = None
     error_message: str | None = ""
     try:
-        async for delta in stream:
-            yield delta.model_dump(exclude_none=True)
-    except openai.APIError as e:
-        error, error_message = e, "Inappropriate content"
-    except Exception as e:
-        error, error_message = e, "Unknown error"
-    if error:
-        span.record_exception(error)
-        span.set_attribute("error_message", error_message or "")
-        trace_info.exception(
-            {
-                "exception_class": error.__class__.__name__,
-                "exception_message": str(error),
-                "request": request.model_dump(exclude_none=True),
-            }
-        )
-        yield {"response_type": "error", "message": error_message}
-    yield {"response_type": "done"}
+        try:
+            async for delta in stream:
+                yield delta.model_dump(exclude_none=True)
+        except openai.APIError as e:
+            error, error_message = e, "Inappropriate content"
+        except Exception as e:
+            error, error_message = e, "Unknown error"
+        if error:
+            span.record_exception(error)
+            span.set_attribute("error_message", error_message or "")
+            trace_info.exception(
+                {
+                    "exception_class": error.__class__.__name__,
+                    "exception_message": str(error),
+                    "request": request.model_dump(exclude_none=True),
+                }
+            )
+            yield {"response_type": "error", "message": error_message}
+        yield {"response_type": "done"}
+    finally:
+        if aclose := getattr(stream, "aclose", None):
+            await aclose()
 
 
 async def call_stream(
