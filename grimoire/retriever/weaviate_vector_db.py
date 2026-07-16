@@ -268,29 +268,36 @@ class WeaviateVectorDB:
         offset: int = 0,
     ) -> List[Tuple[dict, float]]:
         collection = await self._get_shard(namespace_id)
-        vector = (await self._embed(query))[0] if query else None
-
         search_limit = limit + offset
         try:
-            response = await collection.query.hybrid(
-                query=query or "",
-                query_properties=[
-                    "chunk_title",
-                    "chunk_text",
-                    "message_content",
-                    "resource_tag_names",
-                    "chunk_title_gse",
-                    "chunk_text_gse",
-                    "message_content_gse",
-                    "resource_tag_names_gse",
-                ],
-                fusion_type=wvc.query.HybridFusion.RANKED,
-                vector=vector,
-                alpha=0.5,
-                filters=condition.to_weaviate_filters(),
-                limit=search_limit,
-                return_metadata=wvc.query.MetadataQuery.full(),
-            )
+            filters = condition.to_weaviate_filters()
+            if query:
+                vector = (await self._embed(query))[0]
+                response = await collection.query.hybrid(
+                    query=query,
+                    query_properties=[
+                        "chunk_title",
+                        "chunk_text",
+                        "message_content",
+                        "resource_tag_names",
+                        "chunk_title_gse",
+                        "chunk_text_gse",
+                        "message_content_gse",
+                        "resource_tag_names_gse",
+                    ],
+                    fusion_type=wvc.query.HybridFusion.RANKED,
+                    vector=vector,
+                    alpha=0.5,
+                    filters=filters,
+                    limit=search_limit,
+                    return_metadata=wvc.query.MetadataQuery.full(),
+                )
+            else:
+                response = await collection.query.fetch_objects(
+                    filters=filters,
+                    limit=search_limit,
+                    return_metadata=wvc.query.MetadataQuery.full(),
+                )
             trace.get_current_span().set_attributes(
                 {
                     "weaviate.hybrid.query": query,
