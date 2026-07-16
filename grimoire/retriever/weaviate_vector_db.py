@@ -268,7 +268,7 @@ class WeaviateVectorDB:
         offset: int = 0,
     ) -> List[Tuple[dict, float]]:
         collection = await self._get_shard(namespace_id)
-        vector = (await self._embed(query))[0] if query else None
+        vector = (await self._embed(query))[0]
 
         search_limit = limit + offset
         try:
