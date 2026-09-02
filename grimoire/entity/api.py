@@ -45,6 +45,9 @@ class AgentRequest(BaseChatRequest, ChatRequestOptions):
     share_id: str | None = Field(default=None, description="Share ID")
     namespace_id: str = Field(description="Namespace ID")
     conversation_id: str
+    current_resource_id: str | None = Field(
+        default=None, description="Currently opened resource ID"
+    )
     messages: list[MessageDto] | None = Field(default=None)
 
 
