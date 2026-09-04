@@ -50,6 +50,8 @@ class Reranker:
                 unique_retrievals.append(retrieval)
         if not unique_retrievals:
             return []
+        if not query.strip():
+            return unique_retrievals
         if not self.config:
             return unique_retrievals
 
