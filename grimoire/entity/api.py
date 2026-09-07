@@ -33,11 +33,18 @@ class MessageAttrs(ChatRequestOptions):
     compact: dict | None = Field(default=None)
     user_context: dict | None = Field(default=None)
     usage: dict | None = Field(default=None)
+    composer: dict | None = Field(default=None)
 
 
 class MessageDto(BaseModel):
     message: dict
     attrs: MessageAttrs | None = Field(default=None)
+
+
+class ChatImageInput(BaseModel):
+    attachment_id: str
+    url: str
+    name: str
 
 
 class AgentRequest(BaseChatRequest, ChatRequestOptions):
@@ -49,6 +56,7 @@ class AgentRequest(BaseChatRequest, ChatRequestOptions):
         default=None, description="Currently opened resource ID"
     )
     messages: list[MessageDto] | None = Field(default=None)
+    images: list[ChatImageInput] | None = Field(default=None)
 
 
 class ChatBaseResponse(BaseModel):
