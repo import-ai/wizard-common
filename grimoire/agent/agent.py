@@ -52,6 +52,17 @@ json_dumps = partial(jsonlib.dumps, ensure_ascii=False, separators=(",", ":"))
 tracer = trace.get_tracer(__name__)
 
 
+def format_current_meta_info(lang: str) -> str:
+    return "\n".join(
+        [
+            "# Meta info",
+            "",
+            f"- Current time: {datetime.now().astimezone().isoformat()}",
+            f"- User's preference response language: {lang}",
+        ]
+    )
+
+
 class UserQueryPreprocessor:
     PRIVATE_SEARCH_TOOL_NAME: str = "private_search"
 
@@ -318,6 +329,25 @@ class Agent(BaseSearchableAgent):
 
         self.custom_tool_call: bool | None = config.grimoire.custom_tool_call
 
+    def _prepare_model_messages(
+        self,
+        system_prompt: str,
+        messages: list[MessageDto],
+        lang: str,
+    ) -> list[dict[str, str]]:
+        history = [
+            message for message in messages if message.message["role"] != "system"
+        ]
+        return [
+            {
+                "role": "system",
+                "content": "\n\n".join(
+                    [system_prompt, format_current_meta_info(lang)]
+                ),
+            },
+            *UserQueryPreprocessor.message_dtos_to_openai_messages(history),
+        ]
+
     @classmethod
     def has_function(cls, tools: list[dict] | None, function_name: str) -> bool:
         for tool in tools or []:
@@ -499,12 +529,8 @@ class Agent(BaseSearchableAgent):
 
                 system_message: dict = {
                     "role": "system",
-                    "content": "\n".join(
-                        [
-                            "# Meta info\n",
-                            f"- Current time: {datetime.now().astimezone().isoformat()}",
-                            f"- User's preference response language: {agent_request.lang or '简体中文'}",
-                        ]
+                    "content": format_current_meta_info(
+                        agent_request.lang or "简体中文"
                     ),
                 }
 
@@ -541,12 +567,11 @@ class Agent(BaseSearchableAgent):
 
             while messages[-1].message["role"] != "assistant":
                 async for chunk in self.chat(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        *UserQueryPreprocessor.message_dtos_to_openai_messages(
-                            messages
-                        ),
-                    ],
+                    messages=self._prepare_model_messages(
+                        system_prompt,
+                        messages,
+                        agent_request.lang or "简体中文",
+                    ),
                     enable_thinking=agent_request.enable_thinking,
                     tools=tool_executor.tools,
                     trace_info=trace_info,
