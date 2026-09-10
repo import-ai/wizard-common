@@ -68,6 +68,7 @@ class ChatBaseResponse(BaseModel):
 class ChatBOSResponse(ChatBaseResponse):
     response_type: Literal["bos"] = "bos"
     role: ChatRole
+    attrs: MessageAttrs | None = Field(default=None)
 
 
 class ChatEOSResponse(ChatBaseResponse):
