@@ -43,18 +43,34 @@ async def _read_space_file(
     return str(content)
 
 
+async def _resolve_space(
+    client: httpx.AsyncClient, resource_id: str
+) -> str | None:
+    """Which space the resource being processed lives in, or None if unknown."""
+    response = await client.get(f"/resources/{resource_id}")
+    response.raise_for_status()
+    space = response.json().get("space_type")
+    return space if space in _SPACES else None
+
+
 async def load_omnibox_markdown(
     *,
     filename: str,
     base_url: str | None = None,
     namespace_id: str | None = None,
     user_id: str | None = None,
+    resource_id: str | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> str:
-    """Load private + teamspace `.omnibox/<filename>`. Missing files are skipped.
+    """Load `.omnibox/<filename>` for the space `resource_id` lives in.
 
-    Failures return an empty string so callers can keep using the default prompt.
-    Does not create missing files.
+    A private resource reads the private file and a teamspace resource reads the
+    teamspace one, so a team's rules do not leak into someone's private notes
+    and vice versa. Both spaces are read when the resource's space cannot be
+    determined, which keeps the file useful rather than silently dropping it.
+
+    Failures return an empty string so callers can keep using the default
+    prompt. Missing files are skipped and never created.
     """
     close_client = False
     http_client = client
@@ -76,9 +92,18 @@ async def load_omnibox_markdown(
             await http_client.aclose()
         return ""
 
+    spaces = _SPACES
+    if resource_id:
+        try:
+            resolved = await _resolve_space(http_client, resource_id)
+            if resolved:
+                spaces = (resolved,)
+        except Exception:
+            pass
+
     sections: list[str] = []
     try:
-        for space in _SPACES:
+        for space in spaces:
             try:
                 root_id = (roots.get(space) or {}).get("id")
                 if not root_id:
