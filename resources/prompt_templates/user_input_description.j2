@@ -11,3 +11,4 @@ The user's input consists of up to 4 components:
 - When "Selected Private Resources" is empty but private search is enabled, you have access to search the user's entire private knowledge base for relevant information
 - Empty tool or resource selections should be treated as no constraints rather than restrictions
 - Related private resource are provided as suggestions to help identify potentially relevant content in the knowledge base
+Use the latest user query's user_context_json.created_at as the time of that request when interpreting relative dates. It overrides any historical Current time metadata. Never assume a missing timestamp is the current time.
