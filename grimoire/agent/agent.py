@@ -36,6 +36,12 @@ from wizard_common.grimoire.entity.tools import (
     PrivateSearchResourceType,
     PrivateSearchTool,
 )
+
+THINKING_LEVELS = frozenset(("low", "high", "max", "xhigh", "ultra"))
+
+
+def resolve_reasoning_effort(level: str | None) -> str | None:
+    return level if level in THINKING_LEVELS else None
 from wizard_common.grimoire.retriever.base import BaseRetriever
 from wizard_common.grimoire.retriever.reranker import (
     get_tool_executor_config,
@@ -360,8 +366,8 @@ class Agent(BaseSearchableAgent):
 
             kwargs: dict = {}
             openai = self.openai.get_config("large", default=self.openai.default)
-            if level in {"low", "high", "max", "xhigh", "ultra"}:
-                kwargs["reasoning_effort"] = level
+            if effort := resolve_reasoning_effort(level):
+                kwargs["reasoning_effort"] = effort
             if enable_thinking is not None and "reasoning_effort" not in kwargs:
                 if large_thinking := self.openai.get_config(
                     "large", thinking=True, default=None
