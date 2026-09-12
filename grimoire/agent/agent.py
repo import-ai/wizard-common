@@ -339,6 +339,7 @@ class Agent(BaseSearchableAgent):
         self,
         messages: list[dict[str, str]],
         enable_thinking: bool | None = None,
+        level: str | None = None,
         tools: list[dict] | None = None,
         *,
         trace_info: TraceInfo | None = None,
@@ -352,13 +353,16 @@ class Agent(BaseSearchableAgent):
                     {
                         "messages": messages,
                         "enable_thinking": enable_thinking,
+                        "level": level,
                         "tools": tools,
                     }
                 )
 
             kwargs: dict = {}
             openai = self.openai.get_config("large", default=self.openai.default)
-            if enable_thinking is not None:
+            if level in {"low", "high", "max", "xhigh", "ultra"}:
+                kwargs["reasoning_effort"] = level
+            if enable_thinking is not None and "reasoning_effort" not in kwargs:
                 if large_thinking := self.openai.get_config(
                     "large", thinking=True, default=None
                 ):
@@ -548,6 +552,7 @@ class Agent(BaseSearchableAgent):
                         ),
                     ],
                     enable_thinking=agent_request.enable_thinking,
+                    level=agent_request.level,
                     tools=tool_executor.tools,
                     trace_info=trace_info,
                 ):

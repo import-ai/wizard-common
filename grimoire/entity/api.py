@@ -15,6 +15,7 @@ class BaseChatRequest(BaseModel):
 class ChatRequestOptions(BaseModel):
     tools: list[PrivateSearchTool | WebSearchTool] | None = Field(default=None)
     enable_thinking: bool | None = Field(default=None)
+    level: str | None = Field(default=None)
     merge_search: bool | None = Field(
         default=None, description="Whether to merge search results from multiple tools."
     )
