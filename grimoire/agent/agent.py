@@ -37,11 +37,6 @@ from wizard_common.grimoire.entity.tools import (
     PrivateSearchTool,
 )
 
-THINKING_LEVELS = frozenset(("low", "high", "max", "xhigh", "ultra"))
-
-
-def resolve_reasoning_effort(level: str | None) -> str | None:
-    return level if level in THINKING_LEVELS else None
 from wizard_common.grimoire.retriever.base import BaseRetriever
 from wizard_common.grimoire.retriever.reranker import (
     get_tool_executor_config,
@@ -52,6 +47,8 @@ from wizard_common.grimoire.retriever.searxng import SearXNG
 from wizard_common.grimoire.retriever.weaviate_vector_db import (
     WeaviateVectorRetriever,
 )
+
+from wizard_common.grimoire.thinking import get_thinking_models
 
 DEFAULT_TOOL_NAME: str = "private_search"
 json_dumps = partial(jsonlib.dumps, ensure_ascii=False, separators=(",", ":"))
@@ -345,9 +342,9 @@ class Agent(BaseSearchableAgent):
         self,
         messages: list[dict[str, str]],
         enable_thinking: bool | None = None,
-        level: str | None = None,
         tools: list[dict] | None = None,
         *,
+        level: str | None = None,
         trace_info: TraceInfo | None = None,
     ) -> AsyncIterable[ChatResponse | MessageDto]:
         chunks: list[dict] = []
@@ -366,9 +363,12 @@ class Agent(BaseSearchableAgent):
 
             kwargs: dict = {}
             openai = self.openai.get_config("large", default=self.openai.default)
-            if effort := resolve_reasoning_effort(level):
-                kwargs["reasoning_effort"] = effort
-            if enable_thinking is not None and "reasoning_effort" not in kwargs:
+            if level is not None:
+                models = get_thinking_models()
+                if models is None:
+                    raise ValueError("Thinking levels are not configured")
+                openai, kwargs = models.basic.select(level).resolve(openai)
+            elif enable_thinking is not None:
                 if large_thinking := self.openai.get_config(
                     "large", thinking=True, default=None
                 ):
