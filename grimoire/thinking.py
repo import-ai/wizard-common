@@ -128,7 +128,7 @@ class ThinkingModels(BaseModel):
 
 @lru_cache(maxsize=1)
 def get_thinking_models() -> ThinkingModels | None:
-    value = os.environ.get("OBW_THINKING_MODELS")
+    value = os.environ.get("OBW_MODELS")
     return ThinkingModels.model_validate_json(value) if value else None
 
 
