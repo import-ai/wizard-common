@@ -50,19 +50,80 @@ class ThinkingEdition(BaseModel):
         raise ValueError("Unsupported thinking level")
 
 
-class ThinkingModels(BaseModel):
-    # Other editions are consumed by their respective Wizard services.
-    basic: ThinkingEdition
+class DefaultThinkingSteps(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    default_step: str
+    steps: list[str] = Field(min_length=1)
 
-    def public_config(self) -> dict:
-        return {
-            "basic": {
-                "default": {"edition": "basic", "level": self.basic.default_level},
-                "levels": [
-                    {"edition": "basic", "level": item.id} for item in self.basic.levels
-                ],
+    @model_validator(mode="after")
+    def validate_steps(self):
+        if (
+            len(self.steps) != len(set(self.steps))
+            or self.default_step not in self.steps
+        ):
+            raise ValueError("Steps must be unique and include default_step")
+        return self
+
+
+class ThinkingModels(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    basic: ThinkingEdition | None = None
+    pro: ThinkingEdition | None = None
+    default: DefaultThinkingSteps | None = None
+
+    @model_validator(mode="after")
+    def validate_references(self):
+        if self.basic is None and self.pro is None:
+            raise ValueError("At least one model edition is required")
+        if self.default:
+            for step in self.default.steps:
+                edition, separator, level = step.partition(".")
+                if not separator:
+                    raise ValueError("Default steps must be edition.level references")
+                self.select(edition, level)
+        return self
+
+    def select(self, edition: str, level: str) -> ThinkingLevel:
+        group = getattr(self, edition, None) if edition in ("basic", "pro") else None
+        if group is None:
+            raise ValueError("Unsupported model edition")
+        return group.select(level)
+
+    def public_config(self, editions=("basic", "pro")) -> dict:
+        config = {}
+        steps = []
+        for edition in editions:
+            group = getattr(self, edition)
+            if group is None:
+                continue
+            levels = [{"edition": edition, "level": item.id} for item in group.levels]
+            config[edition] = {
+                "default": {"edition": edition, "level": group.default_level},
+                "levels": levels,
             }
+            steps.extend(f"{edition}.{item.id}" for item in group.levels)
+        if not steps:
+            return config
+        ordered = (
+            [step for step in self.default.steps if step in steps]
+            if self.default
+            else steps
+        )
+        if not ordered:
+            return config
+        default = self.default.default_step if self.default else steps[0]
+        if default not in ordered:
+            default = ordered[0]
+
+        def selection(step):
+            edition, level = step.split(".", 1)
+            return {"edition": edition, "level": level}
+
+        config["default"] = {
+            "default": selection(default),
+            "levels": [selection(step) for step in ordered],
         }
+        return config
 
 
 @lru_cache(maxsize=1)
@@ -71,10 +132,10 @@ def get_thinking_models() -> ThinkingModels | None:
     return ThinkingModels.model_validate_json(value) if value else None
 
 
-def validate_selection(edition: str | None, level: str | None):
+def validate_selection(edition: str | None, level: str | None, service_edition="basic"):
     if edition is None and level is None:
         return
     models = get_thinking_models()
-    if edition != "basic" or level is None or models is None:
+    if edition != service_edition or level is None or models is None:
         raise ValueError("Unsupported thinking selection")
-    models.basic.select(level)
+    models.select(edition, level)

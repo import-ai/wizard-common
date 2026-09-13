@@ -345,6 +345,7 @@ class Agent(BaseSearchableAgent):
         tools: list[dict] | None = None,
         *,
         level: str | None = None,
+        edition: str = "basic",
         trace_info: TraceInfo | None = None,
     ) -> AsyncIterable[ChatResponse | MessageDto]:
         chunks: list[dict] = []
@@ -367,7 +368,7 @@ class Agent(BaseSearchableAgent):
                 models = get_thinking_models()
                 if models is None:
                     raise ValueError("Thinking levels are not configured")
-                openai, kwargs = models.basic.select(level).resolve(openai)
+                openai, kwargs = models.select(edition, level).resolve(openai)
             elif enable_thinking is not None:
                 if large_thinking := self.openai.get_config(
                     "large", thinking=True, default=None
@@ -559,6 +560,7 @@ class Agent(BaseSearchableAgent):
                     ],
                     enable_thinking=agent_request.enable_thinking,
                     level=agent_request.level,
+                    edition=agent_request.edition or "basic",
                     tools=tool_executor.tools,
                     trace_info=trace_info,
                 ):
