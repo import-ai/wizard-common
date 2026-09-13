@@ -1,7 +1,15 @@
+import json
 import os
 from functools import lru_cache
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    model_validator,
+)
 
 from wizard_common.config import OpenAIConfig
 
@@ -65,8 +73,18 @@ class DefaultThinkingSteps(BaseModel):
         return self
 
 
+class ModelPrice(BaseModel):
+    """Displayed credits per million tokens; numerically internal units per token."""
+
+    model_config = ConfigDict(extra="forbid")
+    input: StrictInt = Field(ge=0)
+    input_cached: StrictInt = Field(ge=0)
+    output: StrictInt = Field(ge=0)
+
+
 class ThinkingModels(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    prices: dict[str, ModelPrice] = Field(default_factory=dict)
     basic: ThinkingEdition | None = None
     pro: ThinkingEdition | None = None
     default: DefaultThinkingSteps | None = None
@@ -139,3 +157,25 @@ def validate_selection(edition: str | None, level: str | None, service_edition="
     if edition != service_edition or level is None or models is None:
         raise ValueError("Unsupported thinking selection")
     models.select(edition, level)
+
+
+def billing_headers(request, service_edition: str) -> dict[str, str]:
+    """Snapshot server-selected pricing without exposing it in public SSE events."""
+    validate_selection(request.edition, request.level, service_edition)
+    models = get_thinking_models()
+    group = getattr(models, service_edition) if models else None
+    if group and request.level is None:
+        request.edition = service_edition
+        request.level = group.default_level
+    price = None
+    if group:
+        selected = group.select(request.level)
+        price = models.prices.get(selected.model)
+    return {
+        "X-Omnibox-Billing": json.dumps(
+            {
+                "edition": service_edition,
+                "price": price.model_dump() if price else None,
+            }
+        )
+    }
