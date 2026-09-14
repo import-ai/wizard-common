@@ -57,11 +57,12 @@ class AgentRequest(BaseChatRequest, ChatRequestOptions):
     )
     messages: list[MessageDto] | None = Field(default=None)
     images: list[ChatImageInput] | None = Field(default=None)
+    query_persisted: bool = False
 
 
 class ChatBaseResponse(BaseModel):
     response_type: Literal[
-        "bos", "delta", "eos", "error", "done", "checkpoint", "metrics"
+        "bos", "delta", "eos", "error", "done", "checkpoint", "metrics", "query_attrs"
     ]
 
 
@@ -110,3 +111,10 @@ class ChatMetricsResponse(ChatBaseResponse):
 class ChatErrorResponse(ChatBaseResponse):
     response_type: Literal["error"] = "error"
     message: str
+
+
+class ChatQueryAttrsResponse(ChatBaseResponse):
+    """Internal update for the query already persisted by the backend."""
+
+    response_type: Literal["query_attrs"] = "query_attrs"
+    attrs: MessageAttrs
