@@ -1,7 +1,6 @@
 import json as jsonlib
 import time
 from abc import ABC
-from datetime import datetime
 from functools import partial
 from typing import AsyncIterable, Iterable
 
@@ -18,6 +17,7 @@ from wizard_common.grimoire.agent.tool_executor import ToolExecutor
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
 from wizard_common.grimoire.config import GrimoireAgentConfig
 from wizard_common.grimoire.entity.api import (
+    ChatQueryAttrsResponse,
     ChatDeltaResponse,
     AgentRequest,
     ChatBOSResponse,
@@ -237,7 +237,26 @@ class UserQueryPreprocessor:
         messages: list[dict[str, str]] = []
 
         for dto in dtos:
-            messages.append(dto.message)
+            message = dto.message
+            if (
+                message["role"] == "user"
+                and dto.attrs
+                and not (dto.attrs.tool_call or {}).get("decisions")
+            ):
+                user_context = dto.attrs.user_context or {}
+                if user_context:
+                    message = {
+                        **message,
+                        "content": "\n".join(
+                            [
+                                "<user_context_json>",
+                                json_dumps(user_context),
+                                "</user_context_json>",
+                                message.get("content") or "",
+                            ]
+                        ),
+                    }
+            messages.append(message)
             if dto.message["role"] == "user" and dto.attrs:
                 if (dto.attrs.tool_call or {}).get("decisions", []):
                     continue
@@ -513,7 +532,6 @@ class Agent(BaseSearchableAgent):
                     "content": "\n".join(
                         [
                             "# Meta info\n",
-                            f"- Current time: {datetime.now().astimezone().isoformat()}",
                             f"- User's preference response language: {agent_request.lang or '简体中文'}",
                         ]
                     ),
@@ -545,6 +563,9 @@ class Agent(BaseSearchableAgent):
             await UserQueryPreprocessor.with_related_resources_(
                 messages[-1], tool_executor.config
             )
+
+            if agent_request.query_persisted and messages[-1].attrs:
+                yield ChatQueryAttrsResponse(attrs=messages[-1].attrs)
 
             system_prompt: str = self.template_parser.render_template(
                 self.system_prompt_template
