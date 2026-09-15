@@ -36,6 +36,7 @@ from wizard_common.grimoire.entity.tools import (
     PrivateSearchResourceType,
     PrivateSearchTool,
 )
+
 from wizard_common.grimoire.retriever.base import BaseRetriever
 from wizard_common.grimoire.retriever.reranker import (
     get_tool_executor_config,
@@ -46,6 +47,8 @@ from wizard_common.grimoire.retriever.searxng import SearXNG
 from wizard_common.grimoire.retriever.weaviate_vector_db import (
     WeaviateVectorRetriever,
 )
+
+from wizard_common.grimoire.thinking import get_thinking_models
 
 DEFAULT_TOOL_NAME: str = "private_search"
 json_dumps = partial(jsonlib.dumps, ensure_ascii=False, separators=(",", ":"))
@@ -360,6 +363,8 @@ class Agent(BaseSearchableAgent):
         enable_thinking: bool | None = None,
         tools: list[dict] | None = None,
         *,
+        level: str | None = None,
+        edition: str = "basic",
         trace_info: TraceInfo | None = None,
     ) -> AsyncIterable[ChatResponse | MessageDto]:
         chunks: list[dict] = []
@@ -371,13 +376,19 @@ class Agent(BaseSearchableAgent):
                     {
                         "messages": messages,
                         "enable_thinking": enable_thinking,
+                        "level": level,
                         "tools": tools,
                     }
                 )
 
             kwargs: dict = {}
             openai = self.openai.get_config("large", default=self.openai.default)
-            if enable_thinking is not None:
+            if level is not None:
+                models = get_thinking_models()
+                if models is None:
+                    raise ValueError("Thinking levels are not configured")
+                openai, kwargs = models.select(edition, level).resolve(openai)
+            elif enable_thinking is not None:
                 if large_thinking := self.openai.get_config(
                     "large", thinking=True, default=None
                 ):
@@ -569,6 +580,8 @@ class Agent(BaseSearchableAgent):
                         ),
                     ],
                     enable_thinking=agent_request.enable_thinking,
+                    level=agent_request.level,
+                    edition=agent_request.edition or "basic",
                     tools=tool_executor.tools,
                     trace_info=trace_info,
                 ):
