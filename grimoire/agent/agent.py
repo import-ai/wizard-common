@@ -1,4 +1,5 @@
 import json as jsonlib
+import os
 import time
 from abc import ABC
 from functools import partial
@@ -43,9 +44,11 @@ from wizard_common.grimoire.retriever.reranker import (
     get_merged_description,
     Reranker,
 )
+from wizard_common.grimoire.retriever.resource_search import ResourceSearch
 from wizard_common.grimoire.retriever.searxng import SearXNG
-from wizard_common.grimoire.retriever.weaviate_vector_db import (
-    WeaviateVectorRetriever,
+from wizard_common.grimoire.retriever.visible_client import (
+    BackendVisibleBaseClient,
+    BackendVisibleClient,
 )
 
 from wizard_common.grimoire.thinking import get_thinking_models
@@ -269,9 +272,8 @@ class UserQueryPreprocessor:
 
 class BaseSearchableAgent(BaseStreamable, ABC):
     def __init__(self, config: GrimoireAgentConfig):
-        self.knowledge_database_retriever = WeaviateVectorRetriever(
-            config=config.vector
-        )
+        self.backend_base_url = os.getenv("OBW_BACKEND_BASE_URL")
+        self.knowledge_database_retriever = ResourceSearch(config=config.vector)
         self.web_search_retriever = SearXNG(
             base_url=config.tools.searxng.base_url, engines=config.tools.searxng.engines
         )
@@ -290,18 +292,42 @@ class BaseSearchableAgent(BaseStreamable, ABC):
             "All tools must be registered in retriever mapping."
         )
 
+    def _visible_client(
+        self, options: ChatRequestOptions, tool
+    ) -> BackendVisibleBaseClient | None:
+        user_id = getattr(options, "user_id", None)
+        share_id = getattr(options, "share_id", None)
+        if share_id and not user_id:
+            return BackendVisibleBaseClient()
+        namespace_id = getattr(tool, "namespace_id", None) or getattr(
+            options, "namespace_id", None
+        )
+        if not user_id or not namespace_id or not self.backend_base_url:
+            return None
+        return BackendVisibleClient(
+            base_url=self.backend_base_url,
+            user_id=user_id,
+            namespace_id=namespace_id,
+        )
+
     def get_tool_executor(
         self,
         options: ChatRequestOptions,
         trace_info: TraceInfo,
         wrap_reranker: bool = True,
     ) -> ToolExecutor:
-        tool_executor_config_list: list[ToolExecutorConfig] = [
-            self.retriever_mapping[tool.name].get_tool_executor_config(
-                tool, trace_info=trace_info.get_child(tool.name)
+        tool_executor_config_list: list[ToolExecutorConfig] = []
+        for tool in options.tools or []:
+            extra = {}
+            if tool.name == "private_search":
+                extra["backend_client"] = self._visible_client(options, tool)
+            tool_executor_config_list.append(
+                self.retriever_mapping[tool.name].get_tool_executor_config(
+                    tool,
+                    trace_info=trace_info.get_child(tool.name),
+                    **extra,
+                )
             )
-            for tool in options.tools or []
-        ]
 
         if options.merge_search:
             tool_executor_config_list = [
