@@ -66,6 +66,7 @@ class SearXNGConfig(BaseModel):
     base_url: str
     engines: str | None = Field(default=None)
 
+
 class BingSearchConfig(BaseModel):
     """playwright-server Bing search API (primary web search).
 
@@ -88,10 +89,12 @@ class BingSearchConfig(BaseModel):
     page_end: int | None = Field(default=None)
     timeout_sec: float = Field(default=60.0)
 
+
 class ToolsConfig(BaseModel):
     searxng: SearXNGConfig
     bing_search: BingSearchConfig = Field(default_factory=BingSearchConfig)
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
+
 
 class GrimoireAgentConfig(BaseModel):
     vector: VectorConfig

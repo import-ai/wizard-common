@@ -20,9 +20,7 @@ class WebSearch(BaseRetriever):
         )
 
         bing_base_url = (
-            bing_search.base_url
-            or os.getenv("OBW_TASK_SCRAPE_BASE_URL")
-            or ""
+            bing_search.base_url or os.getenv("OBW_TASK_SCRAPE_BASE_URL") or ""
         ).rstrip("/")
         self.primary: BingSearch | None = None
         if bing_search.enabled and bing_base_url:
@@ -68,9 +66,7 @@ class WebSearch(BaseRetriever):
                         }
                     )
 
-        return await self.fallback.search(
-            query, k=k, trace_info=trace_info, **kwargs
-        )
+        return await self.fallback.search(query, k=k, trace_info=trace_info, **kwargs)
 
     def get_function(self, tool: BaseTool, **kwargs) -> SearchFunction:
         return partial(self.search, **kwargs)
