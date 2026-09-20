@@ -43,7 +43,7 @@ from wizard_common.grimoire.retriever.reranker import (
     get_merged_description,
     Reranker,
 )
-from wizard_common.grimoire.retriever.searxng import SearXNG
+from wizard_common.grimoire.retriever.web_search import WebSearch
 from wizard_common.grimoire.retriever.weaviate_vector_db import (
     WeaviateVectorRetriever,
 )
@@ -272,8 +272,9 @@ class BaseSearchableAgent(BaseStreamable, ABC):
         self.knowledge_database_retriever = WeaviateVectorRetriever(
             config=config.vector
         )
-        self.web_search_retriever = SearXNG(
-            base_url=config.tools.searxng.base_url, engines=config.tools.searxng.engines
+        self.web_search_retriever = WebSearch(
+            searxng=config.tools.searxng,
+            bing_search=config.tools.bing_search,
         )
 
         self.reranker: Reranker = Reranker(config.tools.reranker)
