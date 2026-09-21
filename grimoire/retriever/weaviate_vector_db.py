@@ -554,11 +554,12 @@ class WeaviateVectorRetriever(BaseRetriever):
     @staticmethod
     def get_type(
         resource_id: str, resources: list[Resource]
-    ) -> PrivateSearchResourceType | None:
+    ) -> PrivateSearchResourceType:
         for resource in resources:
             if resource.id == resource_id:
                 return resource.type
-        return None
+        # Chunk hits are documents; empty visible_resources used to yield None.
+        return PrivateSearchResourceType.RESOURCE
 
     def get_function(
         self, private_search_tool: PrivateSearchTool, **kwargs
