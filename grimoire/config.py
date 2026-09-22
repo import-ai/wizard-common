@@ -67,8 +67,32 @@ class SearXNGConfig(BaseModel):
     engines: str | None = Field(default=None)
 
 
+class BingSearchConfig(BaseModel):
+    """playwright-server Bing search API (primary web search).
+
+    If base_url is omitted, runtime should fall back to OBW_TASK_SCRAPE_BASE_URL
+    because Bing search and scrape share the same playwright-server.
+    """
+
+    base_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional override for playwright-server base URL. "
+            "When empty, fall back to OBW_TASK_SCRAPE_BASE_URL."
+        ),
+    )
+    enabled: bool = Field(default=True)
+    mkt: str = Field(default="zh-CN")
+    setlang: str = Field(default="zh-Hans")
+    cc: str = Field(default="CN")
+    page_start: int = Field(default=1)
+    page_end: int | None = Field(default=None)
+    timeout_sec: float = Field(default=60.0)
+
+
 class ToolsConfig(BaseModel):
     searxng: SearXNGConfig
+    bing_search: BingSearchConfig = Field(default_factory=BingSearchConfig)
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
 
 

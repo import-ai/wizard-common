@@ -45,11 +45,11 @@ from wizard_common.grimoire.retriever.reranker import (
     Reranker,
 )
 from wizard_common.grimoire.retriever.resource_search import ResourceSearch
-from wizard_common.grimoire.retriever.searxng import SearXNG
 from wizard_common.grimoire.retriever.visible_client import (
     BackendVisibleBaseClient,
     BackendVisibleClient,
 )
+from wizard_common.grimoire.retriever.web_search import WebSearch
 
 from wizard_common.grimoire.thinking import get_thinking_models
 
@@ -274,8 +274,9 @@ class BaseSearchableAgent(BaseStreamable, ABC):
     def __init__(self, config: GrimoireAgentConfig):
         self.backend_base_url = os.getenv("OBW_BACKEND_BASE_URL")
         self.knowledge_database_retriever = ResourceSearch(config=config.vector)
-        self.web_search_retriever = SearXNG(
-            base_url=config.tools.searxng.base_url, engines=config.tools.searxng.engines
+        self.web_search_retriever = WebSearch(
+            searxng=config.tools.searxng,
+            bing_search=config.tools.bing_search,
         )
 
         self.reranker: Reranker = Reranker(config.tools.reranker)
