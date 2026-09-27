@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from common import project_root
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
-from wizard_common.config import OpenAIConfig
+from wizard_common.config import OpenAIConfig, parse_model_name
 from wizard_common.grimoire.config import GrimoireOpenAIConfig, GrimoireOpenAIConfigKey
 
 InputType = TypeVar("InputType", bound=BaseModel)
@@ -105,9 +105,13 @@ class BaseAgent(Generic[InputType, OutputType]):
     ):
         self.kwargs: dict = {}
         openai_config = config.get_config(model_size, default=config.default)
-        if enable_thinking and (
-            openai_thinking := config.get_config(
-                model_size, thinking=True, default=None
+        if (
+            enable_thinking
+            and not parse_model_name(openai_config.model)[1]
+            and (
+                openai_thinking := config.get_config(
+                    model_size, thinking=True, default=None
+                )
             )
         ):
             openai_config = openai_thinking
