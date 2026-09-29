@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 def parse_model_name(value: str | None) -> tuple[str | None, dict]:
-    """Separate a model ID from one explicit thinking parameter."""
+    """Separate a model ID from explicitly configured thinking parameters."""
     if value is None:
         return None, {}
     model, separator, query = value.partition("?")
@@ -15,23 +15,28 @@ def parse_model_name(value: str | None) -> tuple[str | None, dict]:
     if not separator:
         return model, {}
     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True)
-    if len(pairs) != 1:
-        raise ValueError("Configure exactly one thinking parameter in the model suffix")
-    key, parameter = pairs[0]
-    if key == "enable_thinking" and parameter in ("true", "false"):
-        return model, {"extra_body": {key: parameter == "true"}}
-    if key == "reasoning_effort" and parameter in (
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max",
-        "ultra",
-    ):
-        return model, {key: parameter}
-    raise ValueError("Unsupported thinking parameter or value in model suffix")
+    if not pairs or len(dict(pairs)) != len(pairs):
+        raise ValueError(
+            "Model suffix must contain nonempty, unique thinking parameters"
+        )
+    parameters = {}
+    for key, parameter in pairs:
+        if key == "enable_thinking" and parameter in ("true", "false"):
+            parameters["extra_body"] = {key: parameter == "true"}
+        elif key == "reasoning_effort" and parameter in (
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+        ):
+            parameters[key] = parameter
+        else:
+            raise ValueError("Unsupported thinking parameter or value in model suffix")
+    return model, parameters
 
 
 class OpenAIConfig(BaseModel):
