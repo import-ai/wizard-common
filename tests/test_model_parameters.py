@@ -13,11 +13,19 @@ from wizard_common.grimoire.config import GrimoireOpenAIConfig
 @pytest.mark.parametrize(
     "suffix,expected",
     [
-        ("", {"enable_thinking": False}),
+        ("", {}),
         ("?reasoning_effort=low", {"reasoning_effort": "low"}),
         ("?reasoning_effort=max", {"reasoning_effort": "max"}),
         ("?enable_thinking=true", {"enable_thinking": True}),
         ("?enable_thinking=false", {"enable_thinking": False}),
+        (
+            "?enable_thinking=false&reasoning_effort=low",
+            {"enable_thinking": False, "reasoning_effort": "low"},
+        ),
+        (
+            "?reasoning_effort=high&enable_thinking=true",
+            {"enable_thinking": True, "reasoning_effort": "high"},
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -50,7 +58,7 @@ async def test_model_settings_reach_wire(suffix, expected):
             with patch("wizard_common.config.AsyncOpenAI", return_value=client):
                 await config.chat(
                     messages=[],
-                    extra_body={"enable_thinking": False, "other": "preserved"},
+                    extra_body={"other": "preserved"},
                 )
     assert captured == [
         {
@@ -73,8 +81,9 @@ async def test_model_settings_reach_wire(suffix, expected):
         "model?enable_thinking=1",
         "model?enable_thinking=False",
         "model?unknown=low",
-        "model?reasoning_effort=low&enable_thinking=true",
+        "model?reasoning_effort=low&enable_thinking=invalid",
         "model?reasoning_effort=low&reasoning_effort=high",
+        "model?enable_thinking=false&enable_thinking=false",
         "model?enable_thinking",
     ],
 )
@@ -106,7 +115,7 @@ async def test_explicit_model_override_clears_conflicting_defaults():
 @pytest.mark.parametrize(
     "suffix", ["", "?enable_thinking=false", "?reasoning_effort=low"]
 )
-def test_explicit_suffix_precedes_legacy_thinking_model(suffix):
+def test_base_agent_uses_configured_model_without_implicit_thinking(suffix):
     from jinja2 import Template
     from pydantic import BaseModel
     from wizard_common.agent.base import BaseAgent
@@ -123,8 +132,5 @@ def test_explicit_suffix_precedes_legacy_thinking_model(suffix):
         str,
         system_prompt_template=Template("Classify the image"),
         model_size="vision",
-        enable_thinking=True,
     )
-    assert agent.openai_config.model == (
-        "vision" + suffix if suffix else "legacy-thinking"
-    )
+    assert agent.openai_config.model == "vision" + suffix

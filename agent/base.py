@@ -1,17 +1,18 @@
 import json as jsonlib
 import re
+from contextlib import aclosing
 from typing import Type, TypeVar, Generic, AsyncIterator
 
 from jinja2 import Template
 from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
 from opentelemetry import propagate
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from common import project_root
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
-from wizard_common.config import OpenAIConfig, parse_model_name
+from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig, GrimoireOpenAIConfigKey
 
 InputType = TypeVar("InputType", bound=BaseModel)
@@ -101,22 +102,8 @@ class BaseAgent(Generic[InputType, OutputType]):
         user_prompt_template: Template | str | None = None,
         examples: ExamplesType = None,
         model_size: GrimoireOpenAIConfigKey = "mini",
-        enable_thinking: bool = False,
     ):
-        self.kwargs: dict = {}
         openai_config = config.get_config(model_size, default=config.default)
-        if (
-            enable_thinking
-            and not parse_model_name(openai_config.model)[1]
-            and (
-                openai_thinking := config.get_config(
-                    model_size, thinking=True, default=None
-                )
-            )
-        ):
-            openai_config = openai_thinking
-        else:
-            self.kwargs["extra_body"] = {"enable_thinking": enable_thinking}
 
         assert openai_config is not None, "OpenAI config not provided."
 
@@ -233,19 +220,46 @@ class BaseAgent(Generic[InputType, OutputType]):
     async def ainvoke(
         self, context: dict | InputType, trace_info: TraceInfo | None = None
     ) -> OutputType:
-        str_response: str = ""
-        async for delta in self.astream(context, trace_info):
-            str_response += delta
-        response = self.parse_output(str_response, trace_info=trace_info)
-        return response
+        messages = self.prepare_messages(self.prepare_context(context))
+        for attempt in range(3):
+            str_response = ""
+            async for delta in self._astream_messages(messages, trace_info):
+                str_response += delta
+            try:
+                return self.parse_output(str_response, trace_info=trace_info)
+            except ValidationError as error:
+                if attempt == 2:
+                    raise
+                errors = error.json(
+                    include_input=False, include_context=False, include_url=False
+                )
+                messages.extend(
+                    [
+                        {"role": "assistant", "content": str_response},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your response failed output schema validation:\n"
+                                f"{errors}\n"
+                                "Correct these errors while preserving valid content. "
+                                "Return the complete corrected JSON matching the original "
+                                "schema, without extra fields or commentary."
+                            ),
+                        },
+                    ]
+                )
 
     async def astream(
         self, context: dict | InputType, trace_info: TraceInfo | None = None
     ) -> AsyncIterator[str]:
-        response: str = ""
-        messages: list[dict[str, str]] = self.prepare_messages(
-            self.prepare_context(context)
-        )
+        messages = self.prepare_messages(self.prepare_context(context))
+        async with aclosing(self._astream_messages(messages, trace_info)) as stream:
+            async for delta in stream:
+                yield delta
+
+    async def _astream_messages(
+        self, messages: list[dict], trace_info: TraceInfo | None = None
+    ) -> AsyncIterator[str]:
         headers = {}
         propagate.inject(headers)
         if trace_info:
@@ -256,14 +270,12 @@ class BaseAgent(Generic[InputType, OutputType]):
             messages=messages,
             stream=True,
             extra_headers=headers if headers else None,
-            **self.kwargs,
         )
         try:
             async for chunk in openai_async_stream_response:
                 if not chunk.choices:
                     continue
                 if delta := chunk.choices[0].delta.content:
-                    response += delta
                     yield delta
         finally:
             await openai_async_stream_response.close()
