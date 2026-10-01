@@ -1,14 +1,12 @@
-from abc import abstractmethod, ABC
 import re
 import unicodedata
+from abc import ABC, abstractmethod
 from urllib.parse import urlparse
 
 from anyascii import anyascii
+from common.utils import remove_continuous_break_lines
 from pydantic import BaseModel, Field, field_validator
 from pypinyin import lazy_pinyin
-
-from common.utils import remove_continuous_break_lines
-
 
 CITATION_ID_PATTERN = re.compile(r"^C(\d+)(?:-|$)")
 HAN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")

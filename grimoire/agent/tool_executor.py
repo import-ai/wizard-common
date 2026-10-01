@@ -1,16 +1,15 @@
 import json as jsonlib
 from typing import AsyncIterable
 
-from openai.types.chat import ChatCompletionAssistantMessageParam
-from opentelemetry import trace
-
 from common.model_dump import model_dump
 from common.trace_info import TraceInfo
+from openai.types.chat import ChatCompletionAssistantMessageParam
+from opentelemetry import trace
 from wizard_common.grimoire.entity.api import (
     ChatBaseResponse,
-    ChatEOSResponse,
     ChatBOSResponse,
     ChatDeltaResponse,
+    ChatEOSResponse,
     MessageDto,
 )
 from wizard_common.grimoire.entity.chunk import ResourceChunkRetrieval

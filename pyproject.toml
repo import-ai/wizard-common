@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wizard-common"
+version = "0.1.0"
+description = "Shared wizard and grimoire components for OmniBox"
+requires-python = ">=3.12"
+dependencies = [
+    "anyascii>=0.3.2",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "openai>=2.7.2",
+    "opentelemetry-api>=1.36.0",
+    "pydantic>=2.11.7",
+    "pypinyin>=0.55.0",
+    "python-common @ git+https://github.com/import-ai/python-common.git@80c3d0916b8b450d8a7793f21455fcca0deb6d9f",
+    "shortuuid>=1.0.13",
+    "sse-starlette>=3.0.2",
+    "weaviate-client>=4.17.0",
+]
+
+[tool.setuptools]
+packages = [
+    "wizard_common",
+    "wizard_common.agent",
+    "wizard_common.grimoire",
+    "wizard_common.grimoire.agent",
+    "wizard_common.grimoire.entity",
+    "wizard_common.grimoire.retriever",
+    "wizard_common.wizard",
+    "wizard_common.worker",
+]
+
+[tool.setuptools.package-dir]
+wizard_common = "."
+
+[tool.setuptools.package-data]
+wizard_common = ["resources/**/*.j2", "resources/**/*.md"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.0,<5.0.0",
+    "ruff>=0.16.9,<0.17.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

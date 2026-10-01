@@ -1,19 +1,19 @@
 from enum import Enum
 from functools import partial
 from typing import (
-    Literal,
-    Callable,
-    TypedDict,
-    Awaitable,
-    Union,
-    get_args,
-    cast,
     Any,
+    Awaitable,
+    Callable,
+    Literal,
+    TypedDict,
+    Union,
+    cast,
+    get_args,
 )
 
+import weaviate.classes as wvc
 from opentelemetry import trace
 from pydantic import BaseModel, Field
-import weaviate.classes as wvc
 
 tracer = trace.get_tracer("grimoire.entity.tools")
 ToolName = Literal["private_search", "web_search"]
