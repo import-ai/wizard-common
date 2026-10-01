@@ -5,7 +5,6 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 from pydantic import ValidationError
-
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig
 

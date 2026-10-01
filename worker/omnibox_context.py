@@ -43,9 +43,7 @@ async def _read_space_file(
     return str(content)
 
 
-async def _resolve_space(
-    client: httpx.AsyncClient, resource_id: str
-) -> str | None:
+async def _resolve_space(client: httpx.AsyncClient, resource_id: str) -> str | None:
     """Which space the resource being processed lives in, or None if unknown."""
     response = await client.get(f"/resources/{resource_id}")
     response.raise_for_status()

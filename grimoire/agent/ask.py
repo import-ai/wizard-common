@@ -1,5 +1,5 @@
-from wizard_common.grimoire.config import GrimoireAgentConfig
 from wizard_common.grimoire.agent.agent import Agent
+from wizard_common.grimoire.config import GrimoireAgentConfig
 
 
 class Ask(Agent):

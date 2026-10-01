@@ -4,11 +4,10 @@ from functools import partial
 from typing import Literal
 
 import httpx
-from opentelemetry import trace
-
 from common.exception import CommonException
 from common.trace_info import TraceInfo
-from wizard_common.grimoire.entity.retrieval import Citation, BaseRetrieval
+from opentelemetry import trace
+from wizard_common.grimoire.entity.retrieval import BaseRetrieval, Citation
 from wizard_common.grimoire.entity.tools import BaseTool
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
 

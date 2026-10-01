@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from jinja2 import Template
 from pydantic import BaseModel, ConfigDict, ValidationError
-
 from wizard_common.agent.base import BaseAgent
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig

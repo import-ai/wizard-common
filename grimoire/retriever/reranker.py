@@ -2,15 +2,14 @@ import asyncio
 from functools import partial
 
 import httpx
+from common.trace_info import TraceInfo
 from opentelemetry import trace
 from pydantic import BaseModel
-
-from common.trace_info import TraceInfo
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import RerankerConfig
 from wizard_common.grimoire.entity.retrieval import BaseRetrieval
 from wizard_common.grimoire.entity.tools import ToolExecutorConfig
-from wizard_common.grimoire.retriever.base import SearchFunction, BaseRetriever
+from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
 
 tracer = trace.get_tracer(__name__)
 
