@@ -15,7 +15,7 @@ dependencies = [
     "opentelemetry-api>=1.36.0",
     "pydantic>=2.11.7",
     "pypinyin>=0.55.0",
-    "python-common @ git+https://github.com/import-ai/python-common.git",
+    "python-common @ git+https://github.com/import-ai/python-common.git@80c3d0916b8b450d8a7793f21455fcca0deb6d9f",
     "shortuuid>=1.0.13",
     "sse-starlette>=3.0.2",
     "weaviate-client>=4.17.0",
