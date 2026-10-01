@@ -11,7 +11,6 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from opentelemetry import propagate, trace
 
-from common import project_root
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 from common.utils import remove_continuous_break_lines
