@@ -97,6 +97,7 @@ async def test_explicit_model_override_clears_conflicting_defaults():
     from unittest.mock import AsyncMock
 
     client = AsyncMock()
+    client.__aenter__.return_value = client
     with patch("wizard_common.config.AsyncOpenAI", return_value=client):
         await config.chat(
             model="override?enable_thinking=false",
@@ -109,6 +110,7 @@ async def test_explicit_model_override_clears_conflicting_defaults():
         messages=[],
         extra_body={"enable_thinking": False},
     )
+    client.__aexit__.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
