@@ -1,3 +1,4 @@
+from wizard_common.worker.retry import RetryableTaskError
 import asyncio
 import json
 import re
@@ -376,6 +377,9 @@ class WeaviateVectorDB:
     @staticmethod
     def _message_from_flat_doc(doc: dict) -> Message:
         return Message(
+            chunk_index=doc.get("message_chunk_index"),
+            start_index=doc.get("message_chunk_start_index"),
+            end_index=doc.get("message_chunk_end_index"),
             conversation_id=doc["conversation_id"],
             message_id=doc["message_id"],
             message=OpenAIMessage(
@@ -456,23 +460,14 @@ class WeaviateVectorDB:
     @tracer.start_as_current_span("WeaviateVectorDB.upsert_message")
     async def upsert_message(self, namespace_id: str, user_id: str, message: Message):
         collection = await self._get_shard(namespace_id)
-
-        try:
-            await collection.data.delete_many(
-                where=wvc.query.Filter.by_property("message_id").equal(
-                    message.message_id
-                )
-            )
-        except WeaviateDeleteManyError:
-            # Tenant not found (no data yet for this namespace)
-            pass
-
-        message_content = message.message.content.strip()
-        if not message_content:
-            return
-
+        message_content = message.message.content
         chunks = split_message_content(message_content)
-        vectors = await self._embed([chunk[0] for chunk in chunks])
+        vectors = await self._embed([chunk[0] for chunk in chunks]) if chunks else []
+        if len(vectors) != len(chunks):
+            raise RetryableTaskError(
+                "Message embedding count does not match chunk count"
+            )
+        await self.remove_message_vectors(namespace_id, message_id=message.message_id)
         objects = []
         for index, ((text, start, end), vector) in enumerate(zip(chunks, vectors)):
             properties = {
@@ -489,7 +484,40 @@ class WeaviateVectorDB:
                 "message_chunk_end_index": end,
             }
             objects.append(wvc.data.DataObject(properties=properties, vector=vector))
-        await collection.data.insert_many(objects)
+        if objects:
+            result = await collection.data.insert_many(objects)
+            if result.has_errors:
+                raise RetryableTaskError(
+                    f"Message vector batch failed: {len(result.errors)} objects"
+                )
+
+    async def remove_message_vectors(
+        self, namespace_id: str, message_id: str | None = None
+    ):
+        collection = await self._get_shard(namespace_id)
+        filters = wvc.query.Filter.by_property("type").equal(
+            IndexRecordType.message.value
+        ) & wvc.query.Filter.by_property("namespace_id").equal(namespace_id)
+        if message_id:
+            filters &= wvc.query.Filter.by_property("message_id").equal(message_id)
+        deleted = 0
+        while True:
+            try:
+                result = await collection.data.delete_many(where=filters)
+            except WeaviateDeleteManyError as error:
+                if "tenant not found" in str(error).lower():
+                    return deleted
+                raise
+            if result.failed:
+                raise RetryableTaskError(
+                    f"Message vector deletion failed: {result.failed} objects"
+                )
+            deleted += result.successful
+            remaining = await collection.query.fetch_objects(filters=filters, limit=1)
+            if not remaining.objects:
+                return deleted
+            if not result.successful:
+                raise RetryableTaskError("Message vector deletion made no progress")
 
     @tracer.start_as_current_span("WeaviateVectorDB.remove_conversation")
     async def remove_conversation(self, namespace_id: str, conversation_id: str):
