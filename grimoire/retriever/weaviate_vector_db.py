@@ -30,6 +30,22 @@ from weaviate.exceptions import (
 
 tracer = trace.get_tracer(__name__)
 COLLECTION_NAME = "omnibox_index"
+MESSAGE_CHUNK_SIZE = 2000
+
+
+def split_message_content(content: str, chunk_size: int = MESSAGE_CHUNK_SIZE):
+    chunks: list[tuple[str, int, int]] = []
+    cursor = 0
+    for paragraph in content.split("\n\n"):
+        start = cursor
+        cursor += len(paragraph) + 2
+        if not paragraph:
+            continue
+        for offset in range(0, len(paragraph), chunk_size):
+            text = paragraph[offset : offset + chunk_size]
+            chunks.append((text, start + offset, start + offset + len(text)))
+        cursor = start + len(paragraph) + 2
+    return chunks
 
 
 class WeaviateVectorDB:
@@ -210,6 +226,18 @@ class WeaviateVectorDB:
                 data_type=wvc.config.DataType.TEXT,
                 index_searchable=True,
                 tokenization=wvc.config.Tokenization.WORD,
+            ),
+            wvc.config.Property(
+                name="message_chunk_index",
+                data_type=wvc.config.DataType.INT,
+            ),
+            wvc.config.Property(
+                name="message_chunk_start_index",
+                data_type=wvc.config.DataType.INT,
+            ),
+            wvc.config.Property(
+                name="message_chunk_end_index",
+                data_type=wvc.config.DataType.INT,
             ),
         ]
 
@@ -443,19 +471,25 @@ class WeaviateVectorDB:
         if not message_content:
             return
 
-        vector = (await self._embed(message_content))[0]
-        properties = {
-            "type": IndexRecordType.message.value,
-            "namespace_id": namespace_id,
-            "user_id": user_id,
-        }
-        properties["message_id"] = message.message_id
-        properties["conversation_id"] = message.conversation_id
-        properties["message_role"] = message.message.role
-        properties["message_content"] = message_content
-        properties["message_content_gse"] = self._strip_english_letters(message_content)
-
-        await collection.data.insert(properties=properties, vector=vector)
+        chunks = split_message_content(message_content)
+        vectors = await self._embed([chunk[0] for chunk in chunks])
+        objects = []
+        for index, ((text, start, end), vector) in enumerate(zip(chunks, vectors)):
+            properties = {
+                "type": IndexRecordType.message.value,
+                "namespace_id": namespace_id,
+                "user_id": user_id,
+                "message_id": message.message_id,
+                "conversation_id": message.conversation_id,
+                "message_role": message.message.role,
+                "message_content": text,
+                "message_content_gse": self._strip_english_letters(text),
+                "message_chunk_index": index,
+                "message_chunk_start_index": start,
+                "message_chunk_end_index": end,
+            }
+            objects.append(wvc.data.DataObject(properties=properties, vector=vector))
+        await collection.data.insert_many(objects)
 
     @tracer.start_as_current_span("WeaviateVectorDB.remove_conversation")
     async def remove_conversation(self, namespace_id: str, conversation_id: str):
