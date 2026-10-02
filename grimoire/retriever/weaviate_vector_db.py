@@ -1,3 +1,4 @@
+from uuid import uuid5, NAMESPACE_URL
 from wizard_common.worker.retry import RetryableTaskError
 import asyncio
 import json
@@ -483,7 +484,15 @@ class WeaviateVectorDB:
                 "message_chunk_start_index": start,
                 "message_chunk_end_index": end,
             }
-            objects.append(wvc.data.DataObject(properties=properties, vector=vector))
+            objects.append(
+                wvc.data.DataObject(
+                    properties=properties,
+                    vector=vector,
+                    uuid=uuid5(
+                        NAMESPACE_URL, f"{namespace_id}:{message.message_id}:{index}"
+                    ),
+                )
+            )
         if objects:
             result = await collection.data.insert_many(objects)
             if result.has_errors:
