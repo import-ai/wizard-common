@@ -1,6 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel, Field
+
 from wizard_common.grimoire.entity.chunk import Chunk
 from wizard_common.grimoire.entity.message import Message
 

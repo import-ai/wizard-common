@@ -7,6 +7,9 @@ class OpenAIMessage(BaseModel):
 
 
 class Message(BaseModel):
+    chunk_index: int | None = None
+    start_index: int | None = None
+    end_index: int | None = None
     conversation_id: str
     message_id: str
     message: OpenAIMessage

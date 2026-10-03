@@ -3,6 +3,7 @@ from functools import partial
 
 from common.exception import CommonException
 from common.trace_info import TraceInfo
+
 from wizard_common.grimoire.config import BingSearchConfig, SearXNGConfig
 from wizard_common.grimoire.entity.tools import BaseTool
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction

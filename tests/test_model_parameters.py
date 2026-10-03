@@ -5,6 +5,7 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 from pydantic import ValidationError
+
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig
 
@@ -119,6 +120,7 @@ async def test_explicit_model_override_clears_conflicting_defaults():
 def test_base_agent_uses_configured_model_without_implicit_thinking(suffix):
     from jinja2 import Template
     from pydantic import BaseModel
+
     from wizard_common.agent.base import BaseAgent
 
     agent = BaseAgent(
