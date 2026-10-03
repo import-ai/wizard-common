@@ -1,15 +1,21 @@
-from uuid import uuid5, NAMESPACE_URL
-from wizard_common.worker.retry import RetryableTaskError
 import asyncio
 import json
 import re
 from dataclasses import asdict
 from functools import partial
 from typing import Any, List, Tuple
+from uuid import NAMESPACE_URL, uuid5
 
-from common.trace_info import TraceInfo
+import weaviate
+import weaviate.classes as wvc
 from openai import AsyncOpenAI
 from opentelemetry import propagate, trace
+from weaviate.exceptions import (
+    WeaviateDeleteManyError,
+    WeaviateQueryError,
+)
+
+from common.trace_info import TraceInfo
 from wizard_common.grimoire.config import VectorConfig
 from wizard_common.grimoire.entity.chunk import Chunk, ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordType
@@ -22,13 +28,7 @@ from wizard_common.grimoire.entity.tools import (
     Resource,
 )
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
-
-import weaviate
-import weaviate.classes as wvc
-from weaviate.exceptions import (
-    WeaviateDeleteManyError,
-    WeaviateQueryError,
-)
+from wizard_common.worker.retry import RetryableTaskError
 
 tracer = trace.get_tracer(__name__)
 COLLECTION_NAME = "omnibox_index"
