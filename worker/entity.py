@@ -1,7 +1,7 @@
 import base64
 from datetime import datetime
-from typing import BinaryIO
 from enum import StrEnum
+from typing import BinaryIO
 
 from pydantic import BaseModel, Field
 

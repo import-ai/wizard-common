@@ -8,6 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import weaviate
 import weaviate.classes as wvc
+from common.trace_info import TraceInfo
 from openai import AsyncOpenAI
 from opentelemetry import propagate, trace
 from weaviate.exceptions import (
@@ -15,7 +16,6 @@ from weaviate.exceptions import (
     WeaviateQueryError,
 )
 
-from common.trace_info import TraceInfo
 from wizard_common.grimoire.config import VectorConfig
 from wizard_common.grimoire.entity.chunk import Chunk, ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordType

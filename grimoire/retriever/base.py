@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 
 from wizard_common.grimoire.entity.retrieval import BaseRetrieval
 from wizard_common.grimoire.entity.tools import BaseTool, ToolExecutorConfig

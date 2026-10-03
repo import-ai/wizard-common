@@ -64,5 +64,7 @@ class OpenAIConfig(BaseModel):
             kwargs["extra_body"] = extra_body
             if "reasoning_effort" in parameters:
                 kwargs["reasoning_effort"] = parameters["reasoning_effort"]
-        client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-        return await client.chat.completions.create(**(kwargs | {"model": model_name}))
+        async with AsyncOpenAI(api_key=self.api_key, base_url=self.base_url) as client:
+            return await client.chat.completions.create(
+                **(kwargs | {"model": model_name})
+            )

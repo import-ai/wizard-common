@@ -3,46 +3,45 @@ import os
 import time
 from abc import ABC
 from functools import partial
+from importlib.resources import files
 from typing import AsyncIterable, Iterable
 
+from common.template_parser import TemplateParser
+from common.trace_info import TraceInfo
+from common.utils import remove_continuous_break_lines
 from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from opentelemetry import propagate, trace
 
-from common import project_root
-from common.template_parser import TemplateParser
-from common.trace_info import TraceInfo
-from common.utils import remove_continuous_break_lines
 from wizard_common.grimoire.agent.tool_executor import ToolExecutor
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
 from wizard_common.grimoire.config import GrimoireAgentConfig
 from wizard_common.grimoire.entity.api import (
-    ChatQueryAttrsResponse,
-    ChatDeltaResponse,
     AgentRequest,
-    ChatBOSResponse,
-    ChatEOSResponse,
-    MessageDto,
-    ChatRequestOptions,
     ChatBaseResponse,
+    ChatBOSResponse,
+    ChatDeltaResponse,
+    ChatEOSResponse,
+    ChatQueryAttrsResponse,
+    ChatRequestOptions,
     MessageAttrs,
+    MessageDto,
 )
 from wizard_common.grimoire.entity.chunk import ResourceChunkRetrieval
 from wizard_common.grimoire.entity.tools import (
-    ToolExecutorConfig,
-    ToolDict,
-    Resource,
     ALL_TOOLS,
     PrivateSearchResourceType,
     PrivateSearchTool,
+    Resource,
+    ToolDict,
+    ToolExecutorConfig,
 )
-
 from wizard_common.grimoire.retriever.base import BaseRetriever
 from wizard_common.grimoire.retriever.reranker import (
-    get_tool_executor_config,
-    get_merged_description,
     Reranker,
+    get_merged_description,
+    get_tool_executor_config,
 )
 from wizard_common.grimoire.retriever.resource_search import ResourceSearch
 from wizard_common.grimoire.retriever.visible_client import (
@@ -50,7 +49,6 @@ from wizard_common.grimoire.retriever.visible_client import (
     BackendVisibleClient,
 )
 from wizard_common.grimoire.retriever.web_search import WebSearch
-
 from wizard_common.grimoire.thinking import get_thinking_models
 
 DEFAULT_TOOL_NAME: str = "private_search"
@@ -359,7 +357,7 @@ class Agent(BaseSearchableAgent):
         self.openai = config.grimoire.openai
 
         self.template_parser = TemplateParser(
-            base_dir=project_root.path("wizard_common/resources/prompt_templates")
+            base_dir=str(files("wizard_common") / "resources" / "prompt_templates")
         )
         self.system_prompt_template = self.template_parser.get_template(
             system_prompt_template_name

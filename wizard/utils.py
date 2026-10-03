@@ -1,12 +1,12 @@
 from typing import AsyncIterator
 
 import openai
+from common.trace_info import TraceInfo
+from common.utils import json_dumps
 from opentelemetry import trace
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
 
-from common.trace_info import TraceInfo
-from common.utils import json_dumps
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
 from wizard_common.grimoire.entity.api import BaseChatRequest
 
