@@ -570,8 +570,12 @@ class WeaviateVectorDB:
         record_type: IndexRecordType | None,
         offset: int,
         limit: int,
+        conversation_ids: list[str] | None = None,
+        exclude_conversation_ids: list[str] | None = None,
     ) -> List[IndexRecord]:
         condition = Condition(
+            conversation_ids=conversation_ids,
+            exclude_conversation_ids=exclude_conversation_ids,
             namespace_id=namespace_id,
             user_id=user_id,
             record_type=record_type.value if record_type else None,

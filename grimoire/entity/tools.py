@@ -26,6 +26,8 @@ class Condition(BaseModel):
     record_type: str | None = Field(default=None)
     resource_ids: list[str] | None = Field(default=None)
     parent_ids: list[str] | None = Field(default=None)
+    conversation_ids: list[str] | None = None
+    exclude_conversation_ids: list[str] | None = None
     created_at: tuple[float, float] | None = Field(default=None)
     updated_at: tuple[float, float] | None = Field(default=None)
 
@@ -36,6 +38,15 @@ class Condition(BaseModel):
             where = where & (
                 wvc.query.Filter.by_property("user_id").is_none(True)
                 | wvc.query.Filter.by_property("user_id").equal(self.user_id)
+            )
+
+        if self.conversation_ids:
+            where = where & wvc.query.Filter.by_property(
+                "conversation_id"
+            ).contains_any(self.conversation_ids)
+        for conversation_id in self.exclude_conversation_ids or []:
+            where = where & wvc.query.Filter.by_property("conversation_id").not_equal(
+                conversation_id
             )
 
         if self.record_type:
