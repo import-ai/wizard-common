@@ -46,7 +46,6 @@ def split_message_content(content: str, chunk_size: int = MESSAGE_CHUNK_SIZE):
         for offset in range(0, len(paragraph), chunk_size):
             text = paragraph[offset : offset + chunk_size]
             chunks.append((text, start + offset, start + offset + len(text)))
-        cursor = start + len(paragraph) + 2
     return chunks
 
 
@@ -463,11 +462,15 @@ class WeaviateVectorDB:
         collection = await self._get_shard(namespace_id)
         message_content = message.message.content
         chunks = split_message_content(message_content)
-        vectors = await self._embed([chunk[0] for chunk in chunks]) if chunks else []
-        if len(vectors) != len(chunks):
-            raise RetryableTaskError(
-                "Message embedding count does not match chunk count"
-            )
+        vectors = []
+        for offset in range(0, len(chunks), self.batch_size):
+            batch = chunks[offset : offset + self.batch_size]
+            batch_vectors = await self._embed([chunk[0] for chunk in batch])
+            if len(batch_vectors) != len(batch):
+                raise RetryableTaskError(
+                    "Message embedding count does not match chunk count"
+                )
+            vectors.extend(batch_vectors)
         await self.remove_message_vectors(namespace_id, message_id=message.message_id)
         objects = []
         for index, ((text, start, end), vector) in enumerate(zip(chunks, vectors)):
