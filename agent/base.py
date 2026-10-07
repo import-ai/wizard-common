@@ -1,5 +1,6 @@
 import json as jsonlib
 import re
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from typing import AsyncIterator, Generic, Type, TypeVar
 
@@ -7,10 +8,10 @@ from common import project_root
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 from jinja2 import Template
-from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
 from opentelemetry import propagate
 from pydantic import BaseModel, ValidationError
+
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig, GrimoireOpenAIConfigKey
 
@@ -263,8 +264,8 @@ class BaseAgent(Generic[InputType, OutputType]):
         propagate.inject(headers)
         if trace_info:
             headers = headers | {"X-Request-Id": trace_info.request_id}
-        openai_async_stream_response: AsyncStream[
-            ChatCompletionChunk
+        openai_async_stream_response: AsyncGenerator[
+            ChatCompletionChunk, None
         ] = await self.openai_config.chat(
             messages=messages,
             stream=True,
@@ -277,4 +278,4 @@ class BaseAgent(Generic[InputType, OutputType]):
                 if delta := chunk.choices[0].delta.content:
                     yield delta
         finally:
-            await openai_async_stream_response.close()
+            await openai_async_stream_response.aclose()

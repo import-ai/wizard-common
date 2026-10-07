@@ -1,6 +1,7 @@
+from collections.abc import AsyncGenerator
 from urllib.parse import parse_qsl
 
-from openai import AsyncOpenAI, AsyncStream
+from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel, Field, field_validator
 
@@ -52,7 +53,7 @@ class OpenAIConfig(BaseModel):
 
     async def chat(
         self, *, model: str = None, **kwargs
-    ) -> ChatCompletion | AsyncStream[ChatCompletionChunk]:
+    ) -> ChatCompletion | AsyncGenerator[ChatCompletionChunk, None]:
         model_name, parameters = parse_model_name(model or self.model)
         if parameters:
             # Explicit model settings override caller defaults, including extra_body.
@@ -64,6 +65,20 @@ class OpenAIConfig(BaseModel):
             kwargs["extra_body"] = extra_body
             if "reasoning_effort" in parameters:
                 kwargs["reasoning_effort"] = parameters["reasoning_effort"]
+        if kwargs.get("stream"):
+
+            async def stream_response():
+                async with AsyncOpenAI(
+                    api_key=self.api_key, base_url=self.base_url
+                ) as client:
+                    response = await client.chat.completions.create(
+                        **(kwargs | {"model": model_name})
+                    )
+                    async with response:
+                        async for chunk in response:
+                            yield chunk
+
+            return stream_response()
         async with AsyncOpenAI(api_key=self.api_key, base_url=self.base_url) as client:
             return await client.chat.completions.create(
                 **(kwargs | {"model": model_name})

@@ -1,6 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
 from wizard_common.grimoire.entity.retrieval import Citation
 from wizard_common.grimoire.entity.tools import PrivateSearchTool, WebSearchTool
 
