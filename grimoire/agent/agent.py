@@ -669,6 +669,8 @@ class Agent(BaseSearchableAgent):
             stop_reason = "completed"
             try:
                 while True:
+                    held_eos: ChatEOSResponse | None = None
+                    held_tool_delta: ChatDeltaResponse | None = None
                     async for chunk in self.chat(
                         messages=[
                             {"role": "system", "content": system_prompt},
@@ -684,19 +686,35 @@ class Agent(BaseSearchableAgent):
                     ):
                         if isinstance(chunk, MessageDto):
                             messages.append(chunk)
+                        elif isinstance(chunk, ChatEOSResponse):
+                            held_eos = chunk
+                        elif (
+                            isinstance(chunk, ChatDeltaResponse)
+                            and chunk.message.tool_calls
+                        ):
+                            held_tool_delta = chunk
                         elif isinstance(chunk, ChatBaseResponse):
                             yield chunk
                         else:
                             raise ValueError(f"Unexpected chunk type: {type(chunk)}")
                     tool_calls = messages[-1].message.get("tool_calls") or []
                     if force_final or not tool_calls:
-                        if not force_final:
+                        if force_final:
+                            async for chunk in self._close_forced_assistant(
+                                messages[-1], agent_request.lang
+                            ):
+                                yield chunk
+                        else:
                             stop_reason = "completed"
-                        async for chunk in self._close_forced_assistant(
-                            messages[-1], agent_request.lang
-                        ):
-                            yield chunk
+                            if held_tool_delta is not None:
+                                yield held_tool_delta
+                        if held_eos is not None:
+                            yield held_eos
                         break
+                    if held_tool_delta is not None:
+                        yield held_tool_delta
+                    if held_eos is not None:
+                        yield held_eos
                     tool_rounds += 1
                     over_limit = tool_rounds > self.max_tool_rounds
                     execute, skipped = self._split_tool_calls(

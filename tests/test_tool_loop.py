@@ -9,6 +9,7 @@ from wizard_common.grimoire.agent.tool_loop import canonical_tool_key
 from wizard_common.grimoire.entity.api import (
     AgentRequest,
     ChatBOSResponse,
+    ChatDeltaResponse,
     ChatEOSResponse,
     MessageAttrs,
     MessageDto,
@@ -174,10 +175,41 @@ async def test_empty_forced_reply_uses_template_not_unknown_error():
         str(getattr(getattr(chunk, "message", None), "content", "") or "")
         for chunk in chunks
     )
+    last_bos = max(
+        index
+        for index, chunk in enumerate(chunks)
+        if isinstance(chunk, ChatBOSResponse) and chunk.role == "assistant"
+    )
+    eos = next(
+        index
+        for index in range(last_bos + 1, len(chunks))
+        if isinstance(chunks[index], ChatEOSResponse)
+    )
+    window = chunks[last_bos + 1 : eos]
 
     assert "Unknown error" not in text
-    assert "这次不能再调用工具了" in text
+    assert any(
+        isinstance(chunk, ChatDeltaResponse)
+        and "这次不能再调用工具了" in (chunk.message.content or "")
+        for chunk in window
+    )
     assert executor.calls == 1
+
+
+async def test_empty_completed_reply_is_not_replaced_with_the_tool_limit():
+    agent = make_agent()
+    executor = RecordingExecutor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = ScriptedChat([assistant("")])
+
+    chunks = await collect(agent)
+    text = " ".join(
+        str(getattr(getattr(chunk, "message", None), "content", "") or "")
+        for chunk in chunks
+    )
+
+    assert "这次不能再调用工具了" not in text
+    assert executor.calls == 0
 
 
 async def test_cancelling_the_stream_stops_further_model_calls():
