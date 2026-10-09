@@ -110,7 +110,56 @@ async def test_explicit_model_override_clears_conflicting_defaults():
         messages=[],
         extra_body={"enable_thinking": False},
     )
-    client.__aexit__.assert_awaited_once()
+
+
+class ClosableTransport(httpx.MockTransport):
+    """Serves one SSE body lazily and, like a real connection pool, refuses to
+    be read once the client owning it has been closed."""
+
+    closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+    async def handle_async_request(self, request):
+        chunk = {
+            "id": "test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "m",
+            "choices": [
+                {"index": 0, "delta": {"content": "hi"}, "finish_reason": None}
+            ],
+        }
+
+        async def body():
+            for event in (json.dumps(chunk), "[DONE]"):
+                if self.closed:
+                    raise httpx.ReadError("transport closed")
+                yield f"data: {event}\n\n".encode()
+
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body()
+        )
+
+
+@pytest.mark.asyncio
+async def test_streamed_completion_stays_readable_after_chat_returns():
+    config = OpenAIConfig(
+        model="m", api_key="test", base_url="https://model.invalid/v1"
+    )
+    # Not entered as a context manager on purpose: `chat` owns the client, and
+    # the stream is read only after `chat` has returned.
+    client = AsyncOpenAI(
+        api_key="test",
+        base_url="https://model.invalid/v1",
+        http_client=httpx.AsyncClient(transport=ClosableTransport(lambda r: None)),
+    )
+    with patch("wizard_common.config.AsyncOpenAI", return_value=client):
+        stream = await config.chat(messages=[], stream=True)
+
+    assert [part.choices[0].delta.content async for part in stream] == ["hi"]
+    await client.close()
 
 
 @pytest.mark.parametrize(
