@@ -1,3 +1,4 @@
+import asyncio
 import json as jsonlib
 import os
 import time
@@ -14,6 +15,10 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from opentelemetry import propagate, trace
 from wizard_common.grimoire.agent.tool_executor import ToolExecutor
+from wizard_common.grimoire.agent.tool_loop import (
+    MODEL_TOOL_STOP_NOTE,
+    canonical_tool_key,
+)
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
 from wizard_common.grimoire.config import GrimoireAgentConfig
 from wizard_common.grimoire.entity.api import (
@@ -355,11 +360,15 @@ class Agent(BaseSearchableAgent):
         super().__init__(config)
         self.openai = config.grimoire.openai
 
+        self.max_tool_rounds = config.max_tool_rounds
         self.template_parser = TemplateParser(
             base_dir=str(files("wizard_common") / "resources" / "prompt_templates")
         )
         self.system_prompt_template = self.template_parser.get_template(
             system_prompt_template_name
+        )
+        self.tool_loop_fallback_template = self.template_parser.get_template(
+            "tool_loop_fallback.j2"
         )
 
         self.custom_tool_call: bool | None = config.grimoire.custom_tool_call
@@ -380,6 +389,66 @@ class Agent(BaseSearchableAgent):
             {"message": message} | ({"attrs": attrs} if attrs else {})
         )
         yield ChatEOSResponse()
+
+    def _split_tool_calls(
+        self,
+        tool_calls: list[dict],
+        seen_calls: set[tuple[str, str]],
+        over_limit: bool,
+    ) -> tuple[list[dict], list[dict]]:
+        execute: list[dict] = []
+        skipped: list[dict] = []
+        for tool_call in tool_calls:
+            function = tool_call.get("function") or {}
+            key = canonical_tool_key(
+                str(function.get("name") or ""), function.get("arguments")
+            )
+            if over_limit or key in seen_calls:
+                skipped.append(tool_call)
+                continue
+            seen_calls.add(key)
+            execute.append(tool_call)
+        return execute, skipped
+
+    def _skipped_tool_message(self, tool_call: dict) -> MessageDto:
+        return MessageDto.model_validate(
+            {
+                "message": {
+                    "role": "tool",
+                    "tool_call_id": str(tool_call.get("id") or ""),
+                    "content": MODEL_TOOL_STOP_NOTE,
+                },
+                "attrs": {"tool_call": {"status": "success"}},
+            }
+        )
+
+    async def _yield_skipped_tool(self, tool_call: dict):
+        visible = MessageDto.model_validate(
+            {
+                "message": {
+                    "role": "tool",
+                    "tool_call_id": str(tool_call.get("id") or ""),
+                    "content": "",
+                },
+                "attrs": {"tool_call": {"status": "success"}},
+            }
+        )
+        yield ChatBOSResponse(role="tool")
+        yield ChatDeltaResponse.model_validate(visible.model_dump(exclude_none=True))
+        yield ChatEOSResponse()
+
+    async def _close_forced_assistant(self, message_dto: MessageDto, lang: str | None):
+        message = message_dto.message
+        if not message.get("tool_calls") and str(message.get("content") or "").strip():
+            return
+        content = str(message.get("content") or "").strip()
+        if not content:
+            content = self.template_parser.render_template(
+                self.tool_loop_fallback_template, lang=lang or "简体中文"
+            )
+            yield ChatDeltaResponse.model_validate({"message": {"content": content}})
+        message["content"] = content
+        message.pop("tool_calls", None)
 
     async def chat(
         self,
@@ -594,34 +663,94 @@ class Agent(BaseSearchableAgent):
             system_prompt: str = self.template_parser.render_template(
                 self.system_prompt_template
             )
-
-            while messages[-1].message["role"] != "assistant":
-                async for chunk in self.chat(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        *UserQueryPreprocessor.message_dtos_to_openai_messages(
-                            messages
-                        ),
-                    ],
-                    enable_thinking=agent_request.enable_thinking,
-                    level=agent_request.level,
-                    edition=agent_request.edition or "basic",
-                    tools=tool_executor.tools,
-                    trace_info=trace_info,
-                ):
-                    if isinstance(chunk, MessageDto):
-                        messages.append(chunk)
-                    elif isinstance(chunk, ChatBaseResponse):
-                        yield chunk
-                    else:
-                        raise ValueError(f"Unexpected chunk type: {type(chunk)}")
-                if messages[-1].message.get("tool_calls", []):
-                    async for chunk in tool_executor.astream(
-                        messages, trace_info=trace_info.get_child("tool_executor")
+            seen_calls: set[tuple[str, str]] = set()
+            tool_rounds = 0
+            force_final = False
+            stop_reason = "completed"
+            try:
+                while True:
+                    held_eos: ChatEOSResponse | None = None
+                    held_tool_delta: ChatDeltaResponse | None = None
+                    async for chunk in self.chat(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            *UserQueryPreprocessor.message_dtos_to_openai_messages(
+                                messages
+                            ),
+                        ],
+                        enable_thinking=agent_request.enable_thinking,
+                        level=agent_request.level,
+                        edition=agent_request.edition or "basic",
+                        tools=None if force_final else tool_executor.tools,
+                        trace_info=trace_info,
                     ):
                         if isinstance(chunk, MessageDto):
                             messages.append(chunk)
+                        elif isinstance(chunk, ChatEOSResponse):
+                            held_eos = chunk
+                        elif (
+                            isinstance(chunk, ChatDeltaResponse)
+                            and chunk.message.tool_calls
+                        ):
+                            held_tool_delta = chunk
                         elif isinstance(chunk, ChatBaseResponse):
                             yield chunk
                         else:
                             raise ValueError(f"Unexpected chunk type: {type(chunk)}")
+                    tool_calls = messages[-1].message.get("tool_calls") or []
+                    if force_final or not tool_calls:
+                        if force_final:
+                            async for chunk in self._close_forced_assistant(
+                                messages[-1], agent_request.lang
+                            ):
+                                yield chunk
+                        else:
+                            stop_reason = "completed"
+                            if held_tool_delta is not None:
+                                yield held_tool_delta
+                        if held_eos is not None:
+                            yield held_eos
+                        break
+                    if held_tool_delta is not None:
+                        yield held_tool_delta
+                    if held_eos is not None:
+                        yield held_eos
+                    tool_rounds += 1
+                    over_limit = tool_rounds > self.max_tool_rounds
+                    execute, skipped = self._split_tool_calls(
+                        tool_calls, seen_calls, over_limit
+                    )
+                    if over_limit:
+                        stop_reason = "round_limit"
+                    elif skipped:
+                        stop_reason = "duplicate"
+                    if execute:
+                        assistant_message = messages[-1].message
+                        saved_calls = assistant_message["tool_calls"]
+                        assistant_message["tool_calls"] = execute
+                        try:
+                            async for chunk in tool_executor.astream(
+                                messages,
+                                trace_info=trace_info.get_child("tool_executor"),
+                            ):
+                                if isinstance(chunk, MessageDto):
+                                    messages.append(chunk)
+                                elif isinstance(chunk, ChatBaseResponse):
+                                    yield chunk
+                                else:
+                                    raise ValueError(
+                                        f"Unexpected chunk type: {type(chunk)}"
+                                    )
+                        finally:
+                            assistant_message["tool_calls"] = saved_calls
+                    for tool_call in skipped:
+                        async for chunk in self._yield_skipped_tool(tool_call):
+                            yield chunk
+                        messages.append(self._skipped_tool_message(tool_call))
+                    force_final = over_limit or bool(skipped)
+            except asyncio.CancelledError:
+                stop_reason = "cancelled"
+                raise
+            finally:
+                span.set_attribute("agent.tool_rounds", tool_rounds)
+                span.set_attribute("agent.stop_reason", stop_reason)
