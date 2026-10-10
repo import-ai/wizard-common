@@ -51,6 +51,13 @@ class ChatImageInput(BaseModel):
 class AgentRequest(BaseChatRequest, ChatRequestOptions):
     user_id: str | None = Field(default=None, description="User ID")
     share_id: str | None = Field(default=None, description="Share ID")
+    share_access_token: str | None = Field(
+        default=None,
+        description=(
+            "Minted by the backend once the share chat's visitor passed the "
+            "share's checks; sent on internal share reads to prove it"
+        ),
+    )
     namespace_id: str = Field(description="Namespace ID")
     conversation_id: str
     current_resource_id: str | None = Field(
