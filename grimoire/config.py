@@ -100,3 +100,4 @@ class GrimoireAgentConfig(BaseModel):
     vector: VectorConfig
     grimoire: GrimoireConfig
     tools: ToolsConfig
+    max_tool_rounds: int = Field(default=10, ge=1)
