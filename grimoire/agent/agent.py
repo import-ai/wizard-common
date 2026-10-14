@@ -15,6 +15,7 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from opentelemetry import propagate, trace
 from wizard_common.grimoire.agent.tool_executor import ToolExecutor
+from wizard_common.grimoire.agent.saved_resource import saved_resource_prompt_content
 from wizard_common.grimoire.agent.tool_loop import (
     MODEL_TOOL_STOP_NOTE,
     canonical_tool_key,
@@ -249,7 +250,12 @@ class UserQueryPreprocessor:
                 and not (dto.attrs.tool_call or {}).get("decisions")
             ):
                 user_context = dto.attrs.user_context or {}
-                if user_context:
+                saved_content = saved_resource_prompt_content(
+                    message.get("content"), user_context
+                )
+                if saved_content is not None:
+                    message = {**message, "content": saved_content}
+                elif user_context:
                     message = {
                         **message,
                         "content": "\n".join(
