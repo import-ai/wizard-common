@@ -1,7 +1,6 @@
 from typing import Any
 from xml.sax.saxutils import escape
 
-
 MAX_INLINE_SAVED_CONTENT_LENGTH = 12_000
 
 
