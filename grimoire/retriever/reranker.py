@@ -5,6 +5,7 @@ import httpx
 from common.trace_info import TraceInfo
 from opentelemetry import trace
 from pydantic import BaseModel
+
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import RerankerConfig
 from wizard_common.grimoire.entity.retrieval import BaseRetrieval

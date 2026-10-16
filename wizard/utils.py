@@ -6,6 +6,7 @@ from common.utils import json_dumps
 from opentelemetry import trace
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
+
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
 from wizard_common.grimoire.entity.api import BaseChatRequest
 

@@ -10,6 +10,7 @@ from pydantic import (
     StrictInt,
     model_validator,
 )
+
 from wizard_common.config import OpenAIConfig
 
 

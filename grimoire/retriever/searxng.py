@@ -7,6 +7,7 @@ import httpx
 from common.exception import CommonException
 from common.trace_info import TraceInfo
 from opentelemetry import trace
+
 from wizard_common.grimoire.entity.retrieval import BaseRetrieval, Citation
 from wizard_common.grimoire.entity.tools import BaseTool
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction

@@ -14,6 +14,7 @@ from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from opentelemetry import propagate, trace
+
 from wizard_common.grimoire.agent.tool_executor import ToolExecutor
 from wizard_common.grimoire.agent.tool_loop import (
     MODEL_TOOL_STOP_NOTE,

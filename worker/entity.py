@@ -31,6 +31,7 @@ class TaskFunction(StrEnum):
     GENERATE_TITLE = "generate_title"
     GENERATE_VIDEO_NOTE = "generate_video_note"
     GENERATE_AUDIO_NOTE = "generate_audio_note"
+    UPDATE_MEMORY = "update_memory"
 
 
 class NextTaskResponseDto(BaseModel):

@@ -4,6 +4,7 @@ from importlib.resources import files
 import pytest
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
+
 from wizard_common.grimoire.agent.agent import Agent
 from wizard_common.grimoire.agent.tool_loop import canonical_tool_key
 from wizard_common.grimoire.entity.api import (
