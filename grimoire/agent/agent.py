@@ -3,7 +3,6 @@ import json as jsonlib
 import os
 import time
 from abc import ABC
-from collections.abc import AsyncGenerator
 from functools import partial
 from importlib.resources import files
 from typing import AsyncIterable, Iterable
@@ -11,6 +10,7 @@ from typing import AsyncIterable, Iterable
 from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 from common.utils import remove_continuous_break_lines
+from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from opentelemetry import propagate, trace
@@ -502,9 +502,7 @@ class Agent(BaseSearchableAgent):
                 if trace_info:
                     headers = headers | {"X-Request-Id": trace_info.request_id}
 
-                openai_response: AsyncGenerator[
-                    ChatCompletionChunk, None
-                ] = await openai.chat(
+                openai_response: AsyncStream[ChatCompletionChunk] = await openai.chat(
                     messages=messages,
                     stream=True,
                     extra_headers=headers if headers else None,

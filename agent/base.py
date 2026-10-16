@@ -11,6 +11,7 @@ from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
 from opentelemetry import propagate
 from pydantic import BaseModel, ValidationError
+
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig, GrimoireOpenAIConfigKey
 
