@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from jinja2 import Template
 from pydantic import BaseModel, ConfigDict, ValidationError
-
 from wizard_common.agent.base import BaseAgent
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig
@@ -87,7 +86,7 @@ async def test_validation_repair_is_bounded_and_preserves_context(failures):
             assert '"input"' not in feedback and '"ctx"' not in feedback
             assert "complete corrected JSON" in feedback
     for stream in streams:
-        stream.aclose.assert_awaited_once()
+        stream.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -114,7 +113,7 @@ async def test_transport_and_json_errors_are_not_retried():
         with pytest.raises(ValueError, match="valid JSON"):
             await make_agent().ainvoke({})
     chat.assert_awaited_once()
-    stream.aclose.assert_awaited_once()
+    stream.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -128,7 +127,7 @@ async def test_streaming_and_text_outputs_do_not_retry():
             else:
                 assert "".join([part async for part in agent.astream({})]) == "not JSON"
         chat.assert_awaited_once()
-        stream.aclose.assert_awaited_once()
+        stream.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -138,4 +137,4 @@ async def test_closing_stream_closes_transport():
         response = make_agent().astream({})
         await anext(response)
         await response.aclose()
-    stream.aclose.assert_awaited_once()
+    stream.close.assert_awaited_once()

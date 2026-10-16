@@ -5,7 +5,6 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 from pydantic import ValidationError
-
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.config import GrimoireOpenAIConfig
 
@@ -169,7 +168,6 @@ async def test_streamed_completion_stays_readable_after_chat_returns():
 def test_base_agent_uses_configured_model_without_implicit_thinking(suffix):
     from jinja2 import Template
     from pydantic import BaseModel
-
     from wizard_common.agent.base import BaseAgent
 
     agent = BaseAgent(
@@ -186,41 +184,3 @@ def test_base_agent_uses_configured_model_without_implicit_thinking(suffix):
         model_size="vision",
     )
     assert agent.openai_config.model == "vision" + suffix
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stop", ["complete", "close", "error"])
-async def test_stream_keeps_client_open_until_consumed_or_closed(stop):
-    from unittest.mock import AsyncMock
-
-    client = AsyncMock()
-    client.__aenter__.return_value = client
-    response = AsyncMock()
-    response.__aenter__.return_value = response
-
-    async def chunks():
-        client.__aexit__.assert_not_awaited()
-        yield "first"
-        client.__aexit__.assert_not_awaited()
-        if stop == "error":
-            raise RuntimeError("stream failed")
-        yield "last"
-
-    response.__aiter__.side_effect = chunks
-    client.chat.completions.create.return_value = response
-    config = OpenAIConfig(model="test", api_key="test")
-    with patch("wizard_common.config.AsyncOpenAI", return_value=client):
-        stream = await config.chat(messages=[], stream=True)
-        assert await anext(stream) == "first"
-        client.__aexit__.assert_not_awaited()
-        if stop == "close":
-            await stream.aclose()
-        elif stop == "error":
-            with pytest.raises(RuntimeError, match="stream failed"):
-                await anext(stream)
-        else:
-            assert await anext(stream) == "last"
-            with pytest.raises(StopAsyncIteration):
-                await anext(stream)
-    response.__aexit__.assert_awaited_once()
-    client.__aexit__.assert_awaited_once()

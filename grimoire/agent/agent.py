@@ -563,7 +563,7 @@ class Agent(BaseSearchableAgent):
                                     {"message": {key: v}}
                                 )
                 finally:
-                    await openai_response.aclose()
+                    await openai_response.close()
 
             if tool_calls := assistant_message.get("tool_calls"):
                 yield ChatDeltaResponse.model_validate(

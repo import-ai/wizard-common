@@ -1,7 +1,6 @@
-from collections.abc import AsyncGenerator
 from urllib.parse import parse_qsl
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel, Field, field_validator
 
@@ -53,7 +52,7 @@ class OpenAIConfig(BaseModel):
 
     async def chat(
         self, *, model: str = None, **kwargs
-    ) -> ChatCompletion | AsyncGenerator[ChatCompletionChunk, None]:
+    ) -> ChatCompletion | AsyncStream[ChatCompletionChunk]:
         model_name, parameters = parse_model_name(model or self.model)
         if parameters:
             # Explicit model settings override caller defaults, including extra_body.
