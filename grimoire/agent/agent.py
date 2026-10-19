@@ -3,6 +3,7 @@ import json as jsonlib
 import os
 import time
 from abc import ABC
+from contextlib import aclosing
 from functools import partial
 from importlib.resources import files
 from typing import AsyncIterable, Iterable
@@ -19,6 +20,7 @@ from wizard_common.grimoire.agent.tool_loop import (
     MODEL_TOOL_STOP_NOTE,
     canonical_tool_key,
 )
+from wizard_common.grimoire.agent.tps_calculator import TPSCalculator
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
 from wizard_common.grimoire.config import GrimoireAgentConfig
 from wizard_common.grimoire.entity.api import (
@@ -27,6 +29,7 @@ from wizard_common.grimoire.entity.api import (
     ChatBOSResponse,
     ChatDeltaResponse,
     ChatEOSResponse,
+    ChatMetricsResponse,
     ChatQueryAttrsResponse,
     ChatRequestOptions,
     MessageAttrs,
@@ -459,6 +462,7 @@ class Agent(BaseSearchableAgent):
         level: str | None = None,
         edition: str = "basic",
         trace_info: TraceInfo | None = None,
+        tps_calculator: TPSCalculator | None = None,
     ) -> AsyncIterable[ChatResponse | MessageDto]:
         chunks: list[dict] = []
         with tracer.start_as_current_span("agent.chat") as span:
@@ -495,6 +499,9 @@ class Agent(BaseSearchableAgent):
             with tracer.start_as_current_span("agent.chat.openai") as openai_span:
                 start_time: float = time.time()
                 ttft: float = -1.0
+                tps_calculator = tps_calculator or TPSCalculator()
+                last_metrics_time = time.monotonic()
+                last_metrics_tokens = tps_calculator.total
 
                 headers = {}
                 propagate.inject(headers)
@@ -559,8 +566,26 @@ class Agent(BaseSearchableAgent):
                                 yield ChatDeltaResponse.model_validate(
                                     {"message": {key: v}}
                                 )
+                        if (
+                            delta.content
+                            or getattr(delta, "reasoning_content", None)
+                            or delta.tool_calls
+                        ):
+                            await tps_calculator.count()
+                            if time.monotonic() - last_metrics_time >= 1:
+                                yield ChatMetricsResponse(
+                                    tps=await tps_calculator.tps(),
+                                    tokens=tps_calculator.total,
+                                )
+                                last_metrics_time = time.monotonic()
+                                last_metrics_tokens = tps_calculator.total
                 finally:
                     await openai_response.close()
+
+            if tps_calculator.total > last_metrics_tokens:
+                yield ChatMetricsResponse(
+                    tps=await tps_calculator.tps(), tokens=tps_calculator.total
+                )
 
             if tool_calls := assistant_message.get("tool_calls"):
                 yield ChatDeltaResponse.model_validate(
@@ -667,11 +692,12 @@ class Agent(BaseSearchableAgent):
             tool_rounds = 0
             force_final = False
             stop_reason = "completed"
+            tps_calculator = TPSCalculator()
             try:
                 while True:
                     held_eos: ChatEOSResponse | None = None
                     held_tool_delta: ChatDeltaResponse | None = None
-                    async for chunk in self.chat(
+                    chat_stream = self.chat(
                         messages=[
                             {"role": "system", "content": system_prompt},
                             *UserQueryPreprocessor.message_dtos_to_openai_messages(
@@ -683,20 +709,25 @@ class Agent(BaseSearchableAgent):
                         edition=agent_request.edition or "basic",
                         tools=None if force_final else tool_executor.tools,
                         trace_info=trace_info,
-                    ):
-                        if isinstance(chunk, MessageDto):
-                            messages.append(chunk)
-                        elif isinstance(chunk, ChatEOSResponse):
-                            held_eos = chunk
-                        elif (
-                            isinstance(chunk, ChatDeltaResponse)
-                            and chunk.message.tool_calls
-                        ):
-                            held_tool_delta = chunk
-                        elif isinstance(chunk, ChatBaseResponse):
-                            yield chunk
-                        else:
-                            raise ValueError(f"Unexpected chunk type: {type(chunk)}")
+                        tps_calculator=tps_calculator,
+                    )
+                    async with aclosing(chat_stream):
+                        async for chunk in chat_stream:
+                            if isinstance(chunk, MessageDto):
+                                messages.append(chunk)
+                            elif isinstance(chunk, ChatEOSResponse):
+                                held_eos = chunk
+                            elif (
+                                isinstance(chunk, ChatDeltaResponse)
+                                and chunk.message.tool_calls
+                            ):
+                                held_tool_delta = chunk
+                            elif isinstance(chunk, ChatBaseResponse):
+                                yield chunk
+                            else:
+                                raise ValueError(
+                                    f"Unexpected chunk type: {type(chunk)}"
+                                )
                     tool_calls = messages[-1].message.get("tool_calls") or []
                     if force_final or not tool_calls:
                         if force_final:
