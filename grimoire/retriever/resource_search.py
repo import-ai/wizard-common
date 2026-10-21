@@ -2,6 +2,7 @@ from functools import partial
 
 from common.trace_info import TraceInfo
 from opentelemetry import trace
+
 from wizard_common.grimoire.entity.chunk import ResourceChunkRetrieval
 from wizard_common.grimoire.entity.tools import PrivateSearchTool
 from wizard_common.grimoire.retriever.base import SearchFunction

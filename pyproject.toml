@@ -50,3 +50,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["wizard_common"]
+known-third-party = ["common"]

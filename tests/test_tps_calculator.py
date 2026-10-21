@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+
 from wizard_common.grimoire.agent import tps_calculator as metrics_module
 from wizard_common.grimoire.agent.tps_calculator import TPSCalculator
 
