@@ -2,6 +2,7 @@ from typing import Literal
 
 from openai import NOT_GIVEN, NotGiven
 from pydantic import BaseModel, Field
+
 from wizard_common.config import OpenAIConfig
 
 

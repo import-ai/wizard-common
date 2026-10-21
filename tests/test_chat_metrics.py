@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from common.trace_info import TraceInfo
 from openai.types.chat import ChatCompletionChunk
+
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.agent import agent as agent_module
 from wizard_common.grimoire.agent.agent import Agent

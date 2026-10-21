@@ -5,6 +5,7 @@ from typing import Literal, Optional
 
 import shortuuid
 from pydantic import Field
+
 from wizard_common.grimoire.entity.retrieval import (
     BaseRetrieval,
     Citation,
