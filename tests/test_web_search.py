@@ -14,7 +14,9 @@ from wizard_common.grimoire.config import (
     DeepSeekSearchConfig,
     SearXNGConfig,
 )
+from wizard_common.grimoire.retriever import bing_search as bing_module
 from wizard_common.grimoire.retriever import web_search as module
+from wizard_common.grimoire.retriever.bing_search import BingSearch
 from wizard_common.grimoire.retriever.deepseek_search import DeepSeekSearch
 from wizard_common.grimoire.retriever.searxng import SearXNGRetrieval
 from wizard_common.grimoire.retriever.web_search import WebSearch
@@ -124,34 +126,96 @@ async def test_deepseek_wins_and_cancels_slow_bing(spans):
 
 
 @pytest.mark.asyncio
-async def test_searxng_starts_at_two_seconds_after_errors_and_invalid_results(spans):
+async def test_empty_or_failed_providers_start_the_next_provider_immediately(spans):
     search = searcher(
         bing=AsyncMock(side_effect=httpx.ReadTimeout("slow")),
         deepseek=AsyncMock(return_value=[result(" ")]),
         searxng=AsyncMock(return_value=[result("searxng")]),
     )
-    async with asyncio.timeout(4):
+    async with asyncio.timeout(0.5):
         assert await search.search("query") == [result("searxng")]
     attrs = parent_span(spans).attributes
     assert attrs["web_search.winner"] == "searxng"
     assert attrs["web_search.bing.status"] == "error"
     assert attrs["web_search.deepseek.status"] == "empty"
-    assert attrs["web_search.deepseek.start_delay_ms"] >= 990
-    assert attrs["web_search.searxng.start_delay_ms"] >= 1990
+    assert attrs["web_search.deepseek.start_delay_ms"] < 500
+    assert attrs["web_search.searxng.start_delay_ms"] < 500
 
 
 @pytest.mark.asyncio
 async def test_all_empty_returns_empty_after_all_providers_finish(spans):
     search = searcher()
-    async with asyncio.timeout(4):
+    async with asyncio.timeout(0.5):
         assert await search.search("query") == []
     attrs = parent_span(spans).attributes
     assert attrs["web_search.winner"] == "none"
     assert attrs["web_search.status"] == "empty"
+    assert attrs["web_search.latency_ms"] < 500
     for name in ("bing", "deepseek", "searxng"):
         assert attrs[f"web_search.{name}.started"] is True
         assert attrs[f"web_search.{name}.status"] == "empty"
         assert attrs[f"web_search.{name}.latency_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_early_empty_bing_does_not_remove_searxng_absolute_deadline(spans):
+    async def deepseek(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    search = searcher(
+        deepseek=AsyncMock(side_effect=deepseek),
+        searxng=AsyncMock(return_value=[result("searxng")]),
+    )
+    async with asyncio.timeout(4):
+        assert await search.search("query") == [result("searxng")]
+    attrs = parent_span(spans).attributes
+    assert attrs["web_search.deepseek.start_delay_ms"] < 500
+    assert attrs["web_search.searxng.start_delay_ms"] >= 1990
+    assert attrs["web_search.deepseek.status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_empty_deepseek_starts_searxng_while_bing_is_still_running(spans):
+    async def bing(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    search = searcher(
+        bing=AsyncMock(side_effect=bing),
+        searxng=AsyncMock(return_value=[result("searxng")]),
+    )
+    async with asyncio.timeout(1.8):
+        assert await search.search("query") == [result("searxng")]
+    attrs = parent_span(spans).attributes
+    assert attrs["web_search.deepseek.start_delay_ms"] >= 990
+    assert 990 <= attrs["web_search.searxng.start_delay_ms"] < 1800
+    assert attrs["web_search.bing.status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_disabled_providers_do_not_delay_remaining_search(spans):
+    search = searcher(searxng=AsyncMock(return_value=[result()]))
+    search.primary = None
+    search.deepseek = None
+    async with asyncio.timeout(0.5):
+        assert await search.search("query") == [result()]
+    attrs = parent_span(spans).attributes
+    assert attrs["web_search.bing.status"] == "disabled"
+    assert attrs["web_search.deepseek.status"] == "disabled"
+    assert attrs["web_search.searxng.start_delay_ms"] < 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry_cnt", [1, 2])
+async def test_bing_does_not_sleep_after_its_last_failed_attempt(
+    monkeypatch, retry_cnt
+):
+    search = BingSearch("https://bing.invalid")
+    search.search_once = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+    sleep = AsyncMock()
+    monkeypatch.setattr(bing_module, "asyncio", SimpleNamespace(sleep=sleep))
+    with pytest.raises(httpx.ReadTimeout):
+        await search.search("query", retry_cnt=retry_cnt)
+    assert sleep.await_count == retry_cnt - 1
 
 
 @pytest.mark.asyncio

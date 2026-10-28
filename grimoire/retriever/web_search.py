@@ -83,8 +83,15 @@ class WebSearch(BaseRetriever):
                     }
                 )
 
-            async def run_provider(name, delay, provider):
-                await asyncio.sleep(max(0, started_at + delay - time.monotonic()))
+            async def run_provider(name, delay, provider, previous_failed, failed):
+                if previous_failed is not None:
+                    try:
+                        async with asyncio.timeout(
+                            max(0, started_at + delay - time.monotonic())
+                        ):
+                            await previous_failed.wait()
+                    except TimeoutError:
+                        pass
                 call_started_at = time.monotonic()
                 prefix = f"web_search.{name}"
                 span.set_attributes(
@@ -132,12 +139,21 @@ class WebSearch(BaseRetriever):
                                 f"{prefix}.latency_ms": latency_ms,
                             }
                         )
+                        if status in ("empty", "error"):
+                            failed.set()
 
-            tasks = [
-                asyncio.create_task(run_provider(name, delay, provider))
-                for name, delay, provider in providers
-                if provider is not None
-            ]
+            tasks = []
+            previous_failed = None
+            for name, delay, provider in providers:
+                if provider is None:
+                    continue
+                failed = asyncio.Event()
+                tasks.append(
+                    asyncio.create_task(
+                        run_provider(name, delay, provider, previous_failed, failed)
+                    )
+                )
+                previous_failed = failed
             try:
                 for task in asyncio.as_completed(tasks):
                     name, results = await task
