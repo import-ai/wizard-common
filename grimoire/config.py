@@ -91,9 +91,14 @@ class BingSearchConfig(BaseModel):
     timeout_sec: float = Field(default=60.0)
 
 
+class DeepSeekSearchConfig(BaseModel):
+    api_key: str | None = Field(default=None)
+
+
 class ToolsConfig(BaseModel):
     searxng: SearXNGConfig
     bing_search: BingSearchConfig = Field(default_factory=BingSearchConfig)
+    deepseek_search: DeepSeekSearchConfig = Field(default_factory=DeepSeekSearchConfig)
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
 
 
