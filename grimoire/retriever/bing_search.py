@@ -108,7 +108,8 @@ class BingSearch(BaseRetriever):
                             "error": CommonException.parse_exception(e),
                         }
                     )
-            await asyncio.sleep(retry_sleep)
+            if i + 1 < (retry_cnt or 1):
+                await asyncio.sleep(retry_sleep)
 
         if last_error:
             raise last_error

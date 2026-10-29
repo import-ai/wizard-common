@@ -289,6 +289,7 @@ class BaseSearchableAgent(BaseStreamable, ABC):
         self.web_search_retriever = WebSearch(
             searxng=config.tools.searxng,
             bing_search=config.tools.bing_search,
+            deepseek_search=config.tools.deepseek_search,
         )
 
         self.reranker: Reranker = Reranker(config.tools.reranker)
