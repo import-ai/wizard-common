@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 from common.exception import CommonException
 from common.trace_info import TraceInfo
-from opentelemetry import trace
+from opentelemetry import propagate, trace
 
 from wizard_common.grimoire.entity.tools import BaseTool
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
@@ -67,9 +67,12 @@ class BingSearch(BaseRetriever):
         async with httpx.AsyncClient(
             base_url=self.base_url, timeout=self.timeout_sec
         ) as client:
+            headers = {}
+            propagate.inject(headers)
             response = await client.get(
                 "/api/v1/search",
                 params=self._build_params(query),
+                headers=headers,
             )
             response.raise_for_status()
 

@@ -68,6 +68,8 @@ Resource checks remain off until their model/rule/threshold are evaluated on res
 
 ## Observability and rollout
 
+Bing requests propagate the active W3C trace context to the crawler. Its `Bing.*` and `BingBrowser.*` spans separate queueing, browser reuse/launch, context/page creation, navigation, result readiness, HTML retrieval, parsing and cleanup. Navigation attributes include available document DNS, connection, first-byte and download timings without recording URLs, HTML or cookies.
+
 `RelevanceChecker` spans record question count, HTTP status, latency, Bing off-target score/threshold/rejection, and resource input/kept counts. Remote error bodies, authorization headers and snippet contents are not added to these spans. Do not enable raw configuration debug logging in deployments that carry credentials.
 
 Deploy the shared change with both Wizard applications pinned to the same full commit. Keep the optional flags disabled for existing open-source configurations. Enable Bing checks in the intended deployment after configuring the decision endpoint; evaluate resource behavior separately before enabling it. Disabling either flag restores that tool's previous search behavior without changing the crawler.
