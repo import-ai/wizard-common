@@ -9,6 +9,7 @@ from opentelemetry import trace
 
 from wizard_common.grimoire.entity.tools import BaseTool
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
+from wizard_common.grimoire.retriever.relevance import RelevanceChecker, RelevanceError
 from wizard_common.grimoire.retriever.searxng import SearXNGRetrieval
 
 tracer = trace.get_tracer(__name__)
@@ -27,6 +28,7 @@ class BingSearch(BaseRetriever):
         page_start: int = 1,
         page_end: int | None = None,
         timeout_sec: float = 60.0,
+        relevance: RelevanceChecker | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.mkt = mkt
@@ -35,6 +37,7 @@ class BingSearch(BaseRetriever):
         self.page_start = page_start
         self.page_end = page_end
         self.timeout_sec = timeout_sec
+        self.relevance = relevance
 
     def _build_params(self, query: str) -> dict[str, Any]:
         params: dict[str, Any] = {
@@ -77,6 +80,8 @@ class BingSearch(BaseRetriever):
             # Defensive: playwright-server should already 502 on this case.
             raise RuntimeError("bing_no_usable_results")
 
+        if self.relevance is not None:
+            await self.relevance.check_bing(query, usable)
         retrievals = [SearXNGRetrieval(result=item) for item in usable]
         if trace_info:
             trace_info.debug({"len(retrievals)": len(retrievals), "engine": "bing"})
@@ -98,6 +103,9 @@ class BingSearch(BaseRetriever):
                 retrievals = await self.search_once(query, trace_info=trace_info)
                 if retrievals:
                     return retrievals[:k] if k else retrievals
+            except RelevanceError:
+                # A rejected or unchecked result should advance the fallback now.
+                raise
             except Exception as e:
                 last_error = e
                 if trace_info:

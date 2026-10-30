@@ -3,9 +3,11 @@ from functools import partial
 from common.trace_info import TraceInfo
 from opentelemetry import trace
 
+from wizard_common.grimoire.config import VectorConfig
 from wizard_common.grimoire.entity.chunk import ResourceChunkRetrieval
 from wizard_common.grimoire.entity.tools import PrivateSearchTool
 from wizard_common.grimoire.retriever.base import SearchFunction
+from wizard_common.grimoire.retriever.relevance import RelevanceChecker
 from wizard_common.grimoire.retriever.visible_client import VisibleResourceClient
 from wizard_common.grimoire.retriever.weaviate_vector_db import WeaviateVectorRetriever
 
@@ -16,6 +18,12 @@ class ResourceSearch(WeaviateVectorRetriever):
     RESULT_LIMIT = 40
     EMPTY_OVERSAMPLE = 120
     SCOPED_OVERSAMPLE = 80
+
+    def __init__(
+        self, config: VectorConfig, *, relevance: RelevanceChecker | None = None
+    ):
+        super().__init__(config)
+        self.relevance = relevance
 
     @tracer.start_as_current_span("ResourceSearch.query")
     async def query(
@@ -64,11 +72,15 @@ class ResourceSearch(WeaviateVectorRetriever):
         except Exception as e:
             span.record_exception(e)
             return []
-        return [
+        visible = [
             retrieval
             for retrieval in retrievals
             if retrieval.chunk.resource_id in visible_ids
         ][:k]
+        # Never send inaccessible snippets to an external relevance service.
+        if getattr(self, "relevance", None) is not None:
+            return await self.relevance.filter_resources(query, visible)
+        return visible
 
     def get_function(
         self, private_search_tool: PrivateSearchTool, **kwargs
