@@ -24,6 +24,13 @@ from wizard_common.grimoire.retriever.searxng import SearXNGRetrieval
 
 tracer = trace.get_tracer(__name__)
 
+UNKNOWN_TOOL_ERROR = (
+    "The requested tool is not available to this agent. "
+    "Use only the tools provided in this request."
+)
+INVALID_ARGUMENTS_ERROR = "Invalid arguments for the requested tool."
+TOOL_FAILED_ERROR = "The requested tool failed."
+
 
 def cmp(retrieval: BaseRetrieval) -> tuple[int, str, int, float]:
     if isinstance(
@@ -61,10 +68,53 @@ def get_citation_cnt(messages: list[MessageDto]) -> int:
     )
 
 
+def error_tool_wrapper(tool_call_id: str, error: str) -> MessageDto:
+    return MessageDto.model_validate(
+        {
+            "message": {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": f"Error: {error}",
+            },
+            "attrs": {"tool_call": {"status": "failed", "error": error}},
+        }
+    )
+
+
 class ToolExecutor:
     def __init__(self, config: dict[str, ToolExecutorConfig]):
         self.config: dict[str, ToolExecutorConfig] = config
         self.tools: list[dict] = [config["schema"] for config in config.values()]
+
+    @staticmethod
+    def _parse_arguments(raw_arguments, logger: TraceInfo) -> dict | None:
+        if isinstance(raw_arguments, dict):
+            return raw_arguments
+        try:
+            function_args = jsonlib.loads(raw_arguments)
+        except (TypeError, ValueError) as error:
+            logger.error({"message": "Invalid arguments", "error": str(error)})
+            return None
+        if not isinstance(function_args, dict):
+            logger.error(
+                {
+                    "message": "Invalid arguments",
+                    "error": (
+                        f"Expected a JSON object, got {type(function_args).__name__}"
+                    ),
+                }
+            )
+            return None
+        return function_args
+
+    @staticmethod
+    async def _failed_tool_result(tool_call_id: str, error: str):
+        message_dto = error_tool_wrapper(tool_call_id, error)
+        yield ChatDeltaResponse.model_validate(
+            message_dto.model_dump(exclude_none=True)
+        )
+        yield message_dto
+        yield ChatEOSResponse()
 
     async def astream(
         self,
@@ -77,18 +127,38 @@ class ToolExecutor:
                 for tool_call in tool_calls:
                     function = tool_call["function"]
                     tool_call_id: str = str(tool_call["id"])
-                    function_args = jsonlib.loads(function["arguments"])
                     function_name = function["name"]
                     logger = trace_info.get_child(
                         addition_payload={
                             "tool_call_id": tool_call_id,
                             "function_name": function_name,
-                            "function_args": function_args,
                         }
                     )
 
                     yield ChatBOSResponse(role="tool")
-                    if function_name in self.config:
+
+                    function_args = self._parse_arguments(
+                        function.get("arguments"), logger
+                    )
+                    if function_args is None:
+                        async for chunk in self._failed_tool_result(
+                            tool_call_id, INVALID_ARGUMENTS_ERROR
+                        ):
+                            yield chunk
+                        continue
+
+                    logger = logger.bind(function_args=function_args)
+                    if function_name not in self.config or not function_name.endswith(
+                        "search"
+                    ):
+                        logger.error({"message": "Unsupported function"})
+                        async for chunk in self._failed_tool_result(
+                            tool_call_id, UNKNOWN_TOOL_ERROR
+                        ):
+                            yield chunk
+                        continue
+
+                    try:
                         with tracer.start_as_current_span(
                             f"tool_executor.astream.{function_name}"
                         ) as func_span:
@@ -106,11 +176,7 @@ class ToolExecutor:
                             func = self.config[function_name]["func"]
                             result = await func(**function_args)
                             logger.info({"result": model_dump(result)})
-                    else:
-                        logger.error({"message": "Unknown function"})
-                        raise ValueError(f"Unknown function: {function_name}")
 
-                    if function_name.endswith("search"):
                         current_cite_cnt: int = get_citation_cnt(message_dtos)
                         assert isinstance(result, list), (
                             f"Expected list of retrievals, got {type(result)}"
@@ -135,8 +201,16 @@ class ToolExecutor:
                         message_dto: MessageDto = retrieval_wrapper(
                             tool_call_id=tool_call_id, retrievals=sorted_retrievals
                         )
-                    else:
-                        raise ValueError(f"Unknown function: {function_name}")
+                    except Exception:
+                        logger.exception({"message": "Tool execution failed"})
+                        message_dto = error_tool_wrapper(
+                            tool_call_id, TOOL_FAILED_ERROR
+                        )
+                        yield ChatDeltaResponse.model_validate(
+                            message_dto.model_dump(exclude_none=True)
+                        )
+                        yield message_dto
+                        raise
 
                     yield ChatDeltaResponse.model_validate(
                         message_dto.model_dump(exclude_none=True)

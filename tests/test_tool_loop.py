@@ -6,6 +6,7 @@ from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 
 from wizard_common.grimoire.agent.agent import Agent
+from wizard_common.grimoire.agent.tool_executor import UNKNOWN_TOOL_ERROR, ToolExecutor
 from wizard_common.grimoire.agent.tool_loop import canonical_tool_key
 from wizard_common.grimoire.entity.api import (
     AgentRequest,
@@ -23,6 +24,14 @@ def tool_call(call_id: str, arguments: str) -> dict:
         "id": call_id,
         "type": "function",
         "function": {"name": "private_search", "arguments": arguments},
+    }
+
+
+def named_tool_call(call_id: str, name: str, arguments: str = "{}") -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
     }
 
 
@@ -94,6 +103,64 @@ def request() -> AgentRequest:
 
 async def collect(agent: Agent):
     return [item async for item in agent.astream(TraceInfo(), request())]
+
+
+async def collect_request(agent: Agent, agent_request: AgentRequest):
+    return [item async for item in agent.astream(TraceInfo(), agent_request)]
+
+
+async def empty_search(**kwargs) -> list:
+    return []
+
+
+def search_executor() -> ToolExecutor:
+    return ToolExecutor(
+        {
+            "private_search": {
+                "name": "private_search",
+                "schema": {
+                    "type": "function",
+                    "function": {"name": "private_search"},
+                },
+                "func": empty_search,
+            }
+        }
+    )
+
+
+class RecordingChat:
+    def __init__(self, replies: list[dict]):
+        self.replies = replies
+        self.requests: list[dict] = []
+
+    async def __call__(self, messages, tools=None, **kwargs):
+        self.requests.append({"messages": messages, "tools": tools})
+        yield ChatBOSResponse(role="assistant")
+        yield MessageDto(message=self.replies.pop(0))
+        yield ChatEOSResponse()
+
+
+def request_with(messages: list[MessageDto]) -> AgentRequest:
+    return AgentRequest(
+        query="hi",
+        namespace_id="ns",
+        conversation_id="conv",
+        lang="简体中文",
+        messages=messages,
+    )
+
+
+def user_message(content: str) -> MessageDto:
+    return MessageDto(
+        message={"role": "user", "content": content}, attrs=MessageAttrs()
+    )
+
+
+def join_text(chunks) -> str:
+    return " ".join(
+        str(getattr(getattr(chunk, "message", None), "content", "") or "")
+        for chunk in chunks
+    )
 
 
 def test_canonical_tool_key_ignores_object_key_order():
@@ -274,3 +341,156 @@ async def test_client_disconnect_closes_the_sse_generator():
         await streaming_response(generate())(scope, receive, send)
         await closed.wait()
     assert closed.is_set()
+
+
+def history_with_unknown_tool() -> list[MessageDto]:
+    return [
+        user_message("read the file"),
+        MessageDto(
+            message={
+                "role": "assistant",
+                "content": "I read the file earlier.",
+                "tool_calls": [named_tool_call("h1", "read_resource")],
+            }
+        ),
+        MessageDto(
+            message={
+                "role": "tool",
+                "tool_call_id": "h1",
+                "content": "secret file body",
+            }
+        ),
+        user_message("summarize it"),
+    ]
+
+
+async def test_history_unknown_tool_is_removed_from_the_model_view():
+    agent = make_agent()
+    executor = search_executor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = RecordingChat([assistant("final")])
+
+    await collect_request(agent, request_with(history_with_unknown_tool()))
+
+    first = agent.chat.requests[0]["messages"]
+    flattened = str(first)
+    assert "read_resource" not in flattened
+    assert "secret file body" not in flattened
+    assert any(
+        message.get("content") == "I read the file earlier." for message in first
+    )
+
+
+async def test_available_history_tool_call_still_reaches_the_model():
+    agent = make_agent()
+    executor = search_executor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = RecordingChat([assistant("final")])
+    history = [
+        user_message("search"),
+        MessageDto(
+            message={
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [tool_call("h1", '{"query":"old"}')],
+            }
+        ),
+        MessageDto(
+            message={"role": "tool", "tool_call_id": "h1", "content": "old hit"}
+        ),
+        user_message("again"),
+    ]
+
+    await collect_request(agent, request_with(history))
+
+    first = agent.chat.requests[0]["messages"]
+    assert any(
+        message.get("tool_calls") and message["tool_calls"][0]["id"] == "h1"
+        for message in first
+    )
+    assert any(message.get("tool_call_id") == "h1" for message in first)
+
+
+async def test_dangling_history_tool_call_is_removed_from_the_model_view():
+    agent = make_agent()
+    executor = search_executor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = RecordingChat([assistant("final")])
+    history = [
+        MessageDto(
+            message={
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [tool_call("h1", '{"query":"old"}')],
+            }
+        ),
+        user_message("again"),
+    ]
+
+    await collect_request(agent, request_with(history))
+
+    first = agent.chat.requests[0]["messages"]
+    assert not any(message.get("tool_calls") for message in first)
+
+
+async def test_current_round_unknown_tool_failure_reaches_the_next_model_call():
+    agent = make_agent()
+    executor = search_executor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = RecordingChat(
+        [
+            assistant(tool_calls=[named_tool_call("u1", "read_resource")]),
+            assistant("final answer"),
+        ]
+    )
+
+    chunks = await collect(agent)
+
+    assert agent.chat.requests[1]["tools"] is executor.tools
+    second = agent.chat.requests[1]["messages"]
+    assistant_calls = [
+        message for message in second if message.get("role") == "assistant"
+    ]
+    assert assistant_calls[-1]["tool_calls"][0]["function"]["name"] == "read_resource"
+    tool_messages = [message for message in second if message.get("role") == "tool"]
+    assert tool_messages[-1]["tool_call_id"] == "u1"
+    assert tool_messages[-1]["content"] == f"Error: {UNKNOWN_TOOL_ERROR}"
+    assert any(
+        isinstance(chunk, ChatDeltaResponse)
+        and chunk.attrs
+        and (chunk.attrs.tool_call or {}).get("status") == "failed"
+        for chunk in chunks
+    )
+    assert agent.chat.replies == []
+
+
+async def test_repeated_unknown_tool_falls_back_without_raising():
+    agent = make_agent()
+    executor = search_executor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = RecordingChat(
+        [
+            assistant(tool_calls=[named_tool_call("u1", "read_resource")]),
+            assistant(tool_calls=[named_tool_call("u2", "read_resource")]),
+            assistant(""),
+        ]
+    )
+
+    chunks = await collect(agent)
+
+    assert len(agent.chat.requests) == 3
+    assert agent.chat.requests[2]["tools"] is None
+    assert "这次不能再调用工具了" in join_text(chunks)
+
+
+async def test_history_filter_does_not_rewrite_request_messages():
+    agent = make_agent()
+    executor = search_executor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = RecordingChat([assistant("final")])
+    agent_request = request_with(history_with_unknown_tool())
+    before = [dto.model_dump() for dto in agent_request.messages]
+
+    await collect_request(agent, agent_request)
+
+    assert [dto.model_dump() for dto in agent_request.messages[: len(before)]] == before
