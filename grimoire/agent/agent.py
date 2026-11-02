@@ -47,6 +47,7 @@ from wizard_common.grimoire.entity.tools import (
     ToolExecutorConfig,
 )
 from wizard_common.grimoire.retriever.base import BaseRetriever
+from wizard_common.grimoire.retriever.relevance import RelevanceChecker
 from wizard_common.grimoire.retriever.reranker import (
     Reranker,
     get_merged_description,
@@ -285,11 +286,15 @@ class UserQueryPreprocessor:
 class BaseSearchableAgent(BaseStreamable, ABC):
     def __init__(self, config: GrimoireAgentConfig):
         self.backend_base_url = os.getenv("OBW_BACKEND_BASE_URL")
-        self.knowledge_database_retriever = ResourceSearch(config=config.vector)
+        self.relevance = RelevanceChecker(config.tools.relevance)
+        self.knowledge_database_retriever = ResourceSearch(
+            config=config.vector, relevance=self.relevance
+        )
         self.web_search_retriever = WebSearch(
             searxng=config.tools.searxng,
             bing_search=config.tools.bing_search,
             deepseek_search=config.tools.deepseek_search,
+            relevance=self.relevance,
         )
 
         self.reranker: Reranker = Reranker(config.tools.reranker)
@@ -305,6 +310,9 @@ class BaseSearchableAgent(BaseStreamable, ABC):
         assert all(t in self.retriever_mapping for t in ALL_TOOLS), (
             "All tools must be registered in retriever mapping."
         )
+
+    async def aclose(self):
+        await self.relevance.aclose()
 
     def _visible_client(
         self, options: ChatRequestOptions, tool

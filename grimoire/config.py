@@ -1,7 +1,8 @@
 from typing import Literal
+from urllib.parse import urlsplit
 
 from openai import NOT_GIVEN, NotGiven
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from wizard_common.config import OpenAIConfig
 
@@ -95,11 +96,40 @@ class DeepSeekSearchConfig(BaseModel):
     api_key: str | None = Field(default=None)
 
 
+class RelevanceConfig(BaseModel):
+    base_url: str | None = None
+    api_key: SecretStr | None = None
+    model: str | None = None
+    timeout_sec: float = Field(default=2.0, gt=0, allow_inf_nan=False)
+    bing_enabled: bool = False
+    bing_threshold: float = Field(default=0.1, ge=0, le=1)
+    resource_enabled: bool = False
+    resource_threshold: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_enabled_checks(self):
+        if self.bing_enabled or self.resource_enabled:
+            url = urlsplit(self.base_url or "")
+            if (
+                url.scheme not in ("http", "https")
+                or not url.hostname
+                or url.query
+                or url.fragment
+            ):
+                raise ValueError("Relevance checks require an HTTP(S) base_url")
+            if not self.model or not self.model.strip():
+                raise ValueError("Relevance checks require a model")
+        if self.resource_enabled and self.resource_threshold is None:
+            raise ValueError("Resource checks require a calibrated resource_threshold")
+        return self
+
+
 class ToolsConfig(BaseModel):
     searxng: SearXNGConfig
     bing_search: BingSearchConfig = Field(default_factory=BingSearchConfig)
     deepseek_search: DeepSeekSearchConfig = Field(default_factory=DeepSeekSearchConfig)
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
+    relevance: RelevanceConfig = Field(default_factory=RelevanceConfig)
 
 
 class GrimoireAgentConfig(BaseModel):
