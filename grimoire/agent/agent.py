@@ -632,12 +632,19 @@ class Agent(BaseSearchableAgent):
                     "conversation_id": agent_request.conversation_id,
                     "agent_request": json_dumps(
                         agent_request.model_dump(
-                            exclude_none=True, exclude={"conversation_id"}
+                            exclude_none=True,
+                            exclude={"conversation_id", "share_access_token"},
                         )
                     ),
                 }
             )
-            trace_info.info({"request": agent_request.model_dump(exclude_none=True)})
+            trace_info.info(
+                {
+                    "request": agent_request.model_dump(
+                        exclude_none=True, exclude={"share_access_token"}
+                    )
+                }
+            )
 
             tool_executor = self.get_tool_executor(agent_request, trace_info=trace_info)
             messages: list[MessageDto] = agent_request.messages or []

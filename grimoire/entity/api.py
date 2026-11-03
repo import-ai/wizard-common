@@ -120,6 +120,13 @@ class ChatMetricsResponse(ChatBaseResponse):
 class ChatErrorResponse(ChatBaseResponse):
     response_type: Literal["error"] = "error"
     message: str
+    code: str | None = Field(default=None)
+    retryable: bool | None = Field(default=None)
+    request_id: str | None = Field(default=None)
+    trace_id: str | None = Field(default=None)
+    upstream_request_id: str | None = Field(default=None)
+    upstream_status: int | None = Field(default=None)
+    upstream_code: str | None = Field(default=None)
 
 
 class ChatQueryAttrsResponse(ChatBaseResponse):

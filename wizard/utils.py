@@ -1,6 +1,5 @@
 from typing import AsyncIterator
 
-import openai
 from common.trace_info import TraceInfo
 from common.utils import json_dumps
 from opentelemetry import trace
@@ -8,7 +7,8 @@ from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
 
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
-from wizard_common.grimoire.entity.api import BaseChatRequest
+from wizard_common.grimoire.entity.api import BaseChatRequest, ChatErrorResponse
+from wizard_common.wizard.errors import build_stream_error_response
 
 tracer = trace.get_tracer("wizard-common")
 
@@ -16,31 +16,38 @@ tracer = trace.get_tracer("wizard-common")
 async def stream_wrapper(
     request: BaseModel, stream: AsyncIterator[ChatResponse], trace_info: TraceInfo
 ) -> AsyncIterator[dict]:
-    span = trace.get_current_span()
-    trace_info.debug({"request": request.model_dump(exclude_none=True)})
-    error: Exception | None = None
-    error_message: str | None = ""
+    trace_info.debug(
+        {
+            "request": request.model_dump(
+                exclude_none=True, exclude={"share_access_token"}
+            )
+        }
+    )
+    error_response: ChatErrorResponse | None = None
     try:
         async for delta in stream:
             yield delta.model_dump(exclude_none=True)
-    except openai.APIError as e:
-        error, error_message = e, "Inappropriate content"
     except Exception as e:
-        error, error_message = e, "Unknown error"
+        # Built inside the except block so TraceInfo.exception keeps the traceback.
+        error_response = build_stream_error_response(
+            e,
+            lang=getattr(request, "lang", None),
+            request=request,
+            trace_info=trace_info,
+        )
     finally:
         if aclose := getattr(stream, "aclose", None):
-            await aclose()
-    if error:
-        span.record_exception(error)
-        span.set_attribute("error_message", error_message or "")
-        trace_info.exception(
-            {
-                "exception_class": error.__class__.__name__,
-                "exception_message": str(error),
-                "request": request.model_dump(exclude_none=True),
-            }
-        )
-        yield {"response_type": "error", "message": error_message}
+            try:
+                await aclose()
+            except Exception as close_error:
+                trace_info.warning(
+                    {
+                        "event": "wizard.stream.aclose_failed",
+                        "exception_class": close_error.__class__.__name__,
+                    }
+                )
+    if error_response is not None:
+        yield error_response.model_dump(exclude_none=True)
     yield {"response_type": "done"}
 
 
