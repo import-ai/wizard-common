@@ -23,11 +23,12 @@ from wizard_common.wizard.errors import (
 )
 from wizard_common.wizard.utils import stream_wrapper
 
-INPUT_MESSAGE_ZH = "本次请求未通过模型服务的安全审核（可能含历史消息），请修改相关内容后重试，或新建对话。"
+INPUT_MESSAGE_ZH = (
+    "本次请求未通过模型服务的安全审核，请修改相关内容后重试，或新建对话。"
+)
 INPUT_MESSAGE_EN = (
-    "This request did not pass the model service's safety review (earlier messages "
-    "may be involved). Edit the relevant content and try again, or start a new "
-    "conversation."
+    "This request did not pass the model service's safety review. Edit the relevant "
+    "content and try again, or start a new conversation."
 )
 OUTPUT_MESSAGE_ZH = "生成的回复未通过模型服务的安全审核，请新建对话或修改后重试。"
 OUTPUT_MESSAGE_EN = (
