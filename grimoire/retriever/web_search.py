@@ -16,6 +16,7 @@ from wizard_common.grimoire.entity.tools import BaseTool
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
 from wizard_common.grimoire.retriever.bing_search import BingSearch
 from wizard_common.grimoire.retriever.deepseek_search import DeepSeekSearch
+from wizard_common.grimoire.retriever.relevance import RelevanceChecker
 from wizard_common.grimoire.retriever.searxng import SearXNG, SearXNGRetrieval
 
 tracer = trace.get_tracer(__name__)
@@ -29,6 +30,7 @@ class WebSearch(BaseRetriever):
         searxng: SearXNGConfig,
         bing_search: BingSearchConfig,
         deepseek_search: DeepSeekSearchConfig | None = None,
+        relevance: RelevanceChecker | None = None,
     ):
         self.fallback = SearXNG(
             base_url=searxng.base_url,
@@ -48,6 +50,7 @@ class WebSearch(BaseRetriever):
                 page_start=bing_search.page_start,
                 page_end=bing_search.page_end,
                 timeout_sec=bing_search.timeout_sec,
+                relevance=relevance,
             )
         self.deepseek = (
             DeepSeekSearch(deepseek_search.api_key)
