@@ -292,6 +292,14 @@ class RelevanceChecker:
     ) -> list[IndexRecord]:
         if not self.config.search_enabled or not records:
             return records
+        if not self.config.base_url or not self.config.model:
+            trace.get_current_span().set_attributes(
+                {
+                    "relevance.status": "unconfigured",
+                    "relevance.input_count": len(records),
+                }
+            )
+            return records
         chunk_records: list[IndexRecord] = []
         seen_resource_ids: set[str] = set()
         for record in records:

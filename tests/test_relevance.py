@@ -1,11 +1,12 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 from common.config_loader import Loader
+from opentelemetry.trace import SpanContext
 from pydantic import ValidationError
 
 from wizard_common.grimoire.config import (
@@ -19,6 +20,7 @@ from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordT
 from wizard_common.grimoire.entity.message import Message, OpenAIMessage
 from wizard_common.grimoire.entity.retrieval import Score
 from wizard_common.grimoire.entity.tools import PrivateSearchTool
+from wizard_common.grimoire.retriever import relevance as relevance_module
 from wizard_common.grimoire.retriever.relevance import (
     BING_QUESTION,
     RelevanceChecker,
@@ -130,22 +132,25 @@ def test_default_disabled_requires_no_provider_and_validates_explicit_enable():
     assert config(api_key=None).api_key is None
 
 
-def test_search_defaults_and_enabled_validation():
-    assert not RelevanceConfig().search_enabled
-    assert RelevanceConfig().search_batch_size == 20
-    assert RelevanceConfig().search_timeout_sec == 1.0
+def test_search_defaults_and_validation():
+    defaults = RelevanceConfig()
+    assert defaults.search_enabled
+    assert defaults.search_threshold == 0.8
+    assert defaults.search_batch_size == 20
+    assert defaults.search_timeout_sec == 1.0
+    assert RelevanceConfig(search_enabled=False).search_enabled is False
     for overrides in [
-        {"search_enabled": True},
+        {"base_url": "https://judge.invalid/v1"},
+        {"model": "decision-test"},
         {"search_batch_size": 0},
         {"search_batch_size": 101},
         {"search_timeout_sec": 0},
         {"search_timeout_sec": float("inf")},
+        {"search_threshold": -0.1},
         {"search_threshold": 1.5},
     ]:
         with pytest.raises(ValidationError):
-            config(**overrides)
-    enabled = config(search_enabled=True, search_threshold=0.8)
-    assert enabled.search_threshold == 0.8
+            RelevanceConfig(**overrides)
 
 
 def test_search_env_config(monkeypatch):
@@ -195,12 +200,34 @@ async def test_disabled_checks_make_no_client_or_network_request(monkeypatch):
         raise AssertionError("Disabled checks must not construct a client")
 
     monkeypatch.setattr(httpx, "AsyncClient", unexpected)
-    checker = RelevanceChecker(RelevanceConfig())
+    checker = RelevanceChecker(RelevanceConfig(search_enabled=False))
     await checker.check_bing("query", hits())
     resources = [retrieval("keep")]
     assert await checker.filter_resources("query", resources) is resources
     records = [search_record("keep")]
     assert await checker.filter_search_results("query", records) is records
+    await checker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_enabled_search_without_endpoint_is_a_network_free_noop(monkeypatch):
+    def unexpected(**kwargs):
+        raise AssertionError("Unconfigured search checks must not construct a client")
+
+    span = Mock()
+    span.get_span_context.return_value = SpanContext(
+        trace_id=1, span_id=2, is_remote=False
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected)
+    monkeypatch.setattr(
+        relevance_module.trace, "get_current_span", lambda context=None: span
+    )
+    checker = RelevanceChecker(RelevanceConfig())
+    records = [search_record("keep"), message_record("message")]
+    assert await checker.filter_search_results("query", records) is records
+    span.set_attributes.assert_called_once_with(
+        {"relevance.status": "unconfigured", "relevance.input_count": 2}
+    )
     await checker.aclose()
 
 

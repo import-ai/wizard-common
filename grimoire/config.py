@@ -105,14 +105,17 @@ class RelevanceConfig(BaseModel):
     bing_threshold: float = Field(default=0.1, ge=0, le=1)
     resource_enabled: bool = False
     resource_threshold: float | None = Field(default=None, ge=0, le=1)
-    search_enabled: bool = False
-    search_threshold: float | None = Field(default=None, ge=0, le=1)
+    search_enabled: bool = True
+    search_threshold: float = Field(default=0.8, ge=0, le=1)
     search_batch_size: int = Field(default=20, ge=1, le=100)
     search_timeout_sec: float = Field(default=1.0, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_enabled_checks(self):
-        if self.bing_enabled or self.resource_enabled or self.search_enabled:
+        requires_checker = self.bing_enabled or self.resource_enabled
+        # Search is enabled by default, so an unconfigured deployment must still start.
+        partially_configured = bool(self.base_url) or bool(self.model)
+        if requires_checker or partially_configured:
             url = urlsplit(self.base_url or "")
             if (
                 url.scheme not in ("http", "https")
@@ -125,8 +128,6 @@ class RelevanceConfig(BaseModel):
                 raise ValueError("Relevance checks require a model")
         if self.resource_enabled and self.resource_threshold is None:
             raise ValueError("Resource checks require a calibrated resource_threshold")
-        if self.search_enabled and self.search_threshold is None:
-            raise ValueError("Search checks require a calibrated search_threshold")
         return self
 
 
