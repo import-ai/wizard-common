@@ -1,6 +1,6 @@
 # Optional search relevance checks
 
-Wizard and Wizard Pro share this implementation. Bing and resource checks are disabled by default. Search checks are enabled by default with a `0.8` threshold, but a deployment without a relevance endpoint and model starts normally and performs no relevance calls, so existing deployments need no new model service or credentials. The backend always consumes this endpoint in 20-row pages, so its paginated search, GET picker and open API chunk search return filtered results. The crawler service continues to return its original search response format.
+Wizard and Wizard Pro share this implementation. Bing and resource checks are disabled by default. Search checks are enabled by default with a `0.8` threshold, but a deployment without a relevance endpoint and model starts normally and performs no relevance calls, so existing deployments need no new model service or credentials. The backend's search and picker consume this endpoint in 20-row pages, so each record they consider has been judged; the open API's chunk search returns filtered results on its own page size. The crawler service continues to return its original search response format.
 
 ## Configuration
 
@@ -78,7 +78,7 @@ Each request carries the query plus up to `SEARCH_BATCH_SIZE` results with their
 
 The whole response has a `SEARCH_TIMEOUT_SEC` budget shared by all batches; each batch uses the remaining budget as its HTTP timeout. A batch that times out or fails keeps its results and later batches keep theirs, so relevance filtering never removes results because the detector is unavailable. Individual missing or invalid answers keep only the affected result. Trace attributes record the input, chunk and kept counts, the threshold, and batch outcomes (`ok`, `partial` or `unavailable`). This differs from the strict Bing/resource answers: those still fail the whole response.
 
-The backend always requests raw pages of 20 records from this endpoint, so each record it considers has been judged. The filtered results serve paginated search, the GET picker and the open API's chunk search. Message search sends message records through the same endpoint, but the check only judges chunk records, so messages are returned untouched and make no relevance call. `SEARCH_ENABLED` in the wizard is the single switch for all consumers. Sending titles and full chunk text, including text the requesting user cannot access, to a remote endpoint is an explicit deployment and privacy decision; the backend still applies permissions to the final response.
+The backend's search and picker always request raw pages of 20 records from this endpoint, so each record they consider has been judged. The open API's chunk search asks for its own page size, up to 100 records, and also receives filtered results. Message search sends message records through the same endpoint, but the check only judges chunk records, so messages are returned untouched and make no relevance call. `SEARCH_ENABLED` in the wizard is the single switch for all consumers. Sending titles and full chunk text, including text the requesting user cannot access, to a remote endpoint is an explicit deployment and privacy decision; the backend still applies permissions to the final response.
 
 ## Observability and rollout
 
