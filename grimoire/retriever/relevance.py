@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from typing import TypeVar
@@ -37,6 +38,20 @@ SEARCH_CRITERIA = {
 }
 
 Item = TypeVar("Item")
+
+
+def _describe_error(error: BaseException) -> str:
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"{error.response.status_code} {error.response.reason_phrase}"
+    if isinstance(error, httpx.TimeoutException):
+        return type(error).__name__
+    if isinstance(error, httpx.RequestError):
+        return f"{type(error).__name__}: {error}"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, json.JSONDecodeError):
+        return "invalid JSON response"
+    return str(error) or type(error).__name__
 
 
 class RelevanceError(RuntimeError):
@@ -146,8 +161,12 @@ class RelevanceChecker:
                 }
             except (httpx.HTTPError, ValueError, TypeError, TimeoutError) as error:
                 span.set_attribute("error.type", type(error).__name__)
+                span.set_attribute("error.message", _describe_error(error))
                 # Keep credentials, snippets and remote error bodies out of logs.
-                raise RelevanceError("relevance_check_failed") from None
+                cause: BaseException = error
+                if isinstance(error, json.JSONDecodeError):
+                    cause = ValueError("invalid JSON response")
+                raise RelevanceError("relevance_check_failed") from cause
             finally:
                 span.set_attribute(
                     "relevance.latency_ms", (time.monotonic() - started) * 1000
@@ -164,7 +183,11 @@ class RelevanceChecker:
                 answers = await self._post(state, questions, timeout=timeout)
             except (httpx.HTTPError, ValueError, TypeError, TimeoutError) as error:
                 span.set_attribute("error.type", type(error).__name__)
-                raise RelevanceError("relevance_check_failed") from None
+                span.set_attribute("error.message", _describe_error(error))
+                cause: BaseException = error
+                if isinstance(error, json.JSONDecodeError):
+                    cause = ValueError("invalid JSON response")
+                raise RelevanceError("relevance_check_failed") from cause
             finally:
                 span.set_attribute(
                     "relevance.latency_ms", (time.monotonic() - started) * 1000
