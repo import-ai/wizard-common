@@ -3,6 +3,7 @@ import json as jsonlib
 import os
 import time
 from abc import ABC
+from collections.abc import Collection
 from contextlib import aclosing
 from functools import partial
 from importlib.resources import files
@@ -281,6 +282,74 @@ class UserQueryPreprocessor:
                 )
 
         return messages
+
+    @classmethod
+    def compatible_history(
+        cls, dtos: list[MessageDto], available_tool_names: Collection[str]
+    ) -> list[MessageDto]:
+        """Return the history view that only uses tools available to this turn.
+
+        Drops tool calls the current agent cannot execute and their results, as
+        well as dangling calls and orphan results, so the model never receives
+        tool protocol it cannot round-trip. Assistant text and reasoning are
+        kept. The input DTOs are not modified.
+        """
+        available = set(available_tool_names)
+        result_ids: set[str] = set()
+        for dto in dtos:
+            if dto.message.get("role") == "tool":
+                tool_call_id = dto.message.get("tool_call_id")
+                if tool_call_id is not None:
+                    result_ids.add(str(tool_call_id))
+
+        kept_call_ids: set[str] = set()
+        for dto in dtos:
+            if dto.message.get("role") != "assistant":
+                continue
+            for tool_call in dto.message.get("tool_calls") or []:
+                call_id = tool_call.get("id")
+                function_name = (tool_call.get("function") or {}).get("name")
+                if (
+                    call_id is not None
+                    and str(call_id) in result_ids
+                    and function_name in available
+                ):
+                    kept_call_ids.add(str(call_id))
+
+        compatible: list[MessageDto] = []
+        for dto in dtos:
+            message = dto.message
+            role = message.get("role")
+            if role == "tool":
+                tool_call_id = message.get("tool_call_id")
+                if tool_call_id is not None and str(tool_call_id) in kept_call_ids:
+                    compatible.append(dto)
+                continue
+            if role != "assistant" or not message.get("tool_calls"):
+                compatible.append(dto)
+                continue
+            kept_calls = [
+                tool_call
+                for tool_call in message["tool_calls"]
+                if tool_call.get("id") is not None
+                and str(tool_call.get("id")) in kept_call_ids
+            ]
+            if len(kept_calls) == len(message["tool_calls"]):
+                compatible.append(dto)
+                continue
+            if (
+                not kept_calls
+                and not message.get("content")
+                and not message.get("reasoning_content")
+            ):
+                continue
+            new_message = dict(message)
+            if kept_calls:
+                new_message["tool_calls"] = kept_calls
+            else:
+                new_message.pop("tool_calls", None)
+            compatible.append(dto.model_copy(update={"message": new_message}))
+        return compatible
 
 
 class BaseSearchableAgent(BaseStreamable, ABC):
@@ -640,12 +709,19 @@ class Agent(BaseSearchableAgent):
                     "conversation_id": agent_request.conversation_id,
                     "agent_request": json_dumps(
                         agent_request.model_dump(
-                            exclude_none=True, exclude={"conversation_id"}
+                            exclude_none=True,
+                            exclude={"conversation_id", "share_access_token"},
                         )
                     ),
                 }
             )
-            trace_info.info({"request": agent_request.model_dump(exclude_none=True)})
+            trace_info.info(
+                {
+                    "request": agent_request.model_dump(
+                        exclude_none=True, exclude={"share_access_token"}
+                    )
+                }
+            )
 
             tool_executor = self.get_tool_executor(agent_request, trace_info=trace_info)
             messages: list[MessageDto] = agent_request.messages or []
@@ -701,6 +777,11 @@ class Agent(BaseSearchableAgent):
             if agent_request.query_persisted and messages[-1].attrs:
                 yield ChatQueryAttrsResponse(attrs=messages[-1].attrs)
 
+            history_len = len(messages)
+            history_view = UserQueryPreprocessor.compatible_history(
+                messages[:history_len], tool_executor.config.keys()
+            )
+
             system_prompt: str = self.template_parser.render_template(
                 self.system_prompt_template
             )
@@ -717,7 +798,7 @@ class Agent(BaseSearchableAgent):
                         messages=[
                             {"role": "system", "content": system_prompt},
                             *UserQueryPreprocessor.message_dtos_to_openai_messages(
-                                messages
+                                [*history_view, *messages[history_len:]]
                             ),
                         ],
                         enable_thinking=agent_request.enable_thinking,
