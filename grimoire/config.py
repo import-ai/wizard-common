@@ -108,7 +108,7 @@ class RelevanceConfig(BaseModel):
     search_enabled: bool = True
     search_threshold: float = Field(default=0.6, ge=0, le=1)
     search_batch_size: int = Field(default=10, ge=1, le=100)
-    search_timeout_sec: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    search_timeout_sec: float = Field(default=3.0, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_enabled_checks(self):

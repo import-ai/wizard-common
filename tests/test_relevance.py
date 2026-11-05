@@ -157,7 +157,7 @@ def test_search_defaults_and_validation():
     assert defaults.search_enabled
     assert defaults.search_threshold == 0.6
     assert defaults.search_batch_size == 10
-    assert defaults.search_timeout_sec == 1.0
+    assert defaults.search_timeout_sec == 3.0
     assert RelevanceConfig(search_enabled=False).search_enabled is False
     for overrides in [
         {"base_url": "https://judge.invalid/v1"},
