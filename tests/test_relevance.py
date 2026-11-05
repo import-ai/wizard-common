@@ -155,7 +155,7 @@ def test_default_disabled_requires_no_provider_and_validates_explicit_enable():
 def test_search_defaults_and_validation():
     defaults = RelevanceConfig()
     assert defaults.search_enabled
-    assert defaults.search_threshold == 0.6
+    assert defaults.search_threshold == 0.5
     assert defaults.search_batch_size == 10
     assert defaults.search_timeout_sec == 3.0
     assert RelevanceConfig(search_enabled=False).search_enabled is False
