@@ -367,13 +367,13 @@ class RelevanceChecker:
             emitted_chunk_events += 1
 
         def decision_callback(
-            batch: list[IndexRecord], start: int
+            batch: list[IndexRecord], start: int, batch_ordinal: int
         ) -> Callable[[int, float | None, str], None]:
             def on_decision(index: int, score: float | None, decision: str) -> None:
                 emit_chunk_event(
                     batch[index],
                     global_index=start + index,
-                    batch_index=index,
+                    batch_index=batch_ordinal,
                     decision=decision,
                     score=score,
                 )
@@ -389,16 +389,17 @@ class RelevanceChecker:
         skipped_batches = 0
         for start in range(0, len(chunk_records), batch_size):
             batch = chunk_records[start : start + batch_size]
+            batch_ordinal = start // batch_size
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 skipped_batches += 1
                 kept_record_ids.update(id(record) for record in batch)
                 if recording:
-                    for batch_index, record in enumerate(batch):
+                    for index, record in enumerate(batch):
                         emit_chunk_event(
                             record,
-                            global_index=start + batch_index,
-                            batch_index=batch_index,
+                            global_index=start + index,
+                            batch_index=batch_ordinal,
                             decision="fail_open",
                             fail_open_reason="deadline",
                         )
@@ -419,17 +420,21 @@ class RelevanceChecker:
                     partial=True,
                     timeout=min(remaining, self.config.timeout_sec),
                     protected=lambda record: _title_matches(query, record.chunk.title),
-                    on_decision=decision_callback(batch, start) if recording else None,
+                    on_decision=(
+                        decision_callback(batch, start, batch_ordinal)
+                        if recording
+                        else None
+                    ),
                 )
             except RelevanceError:
                 failed_batches += 1
                 kept = batch
                 if recording:
-                    for batch_index, record in enumerate(batch):
+                    for index, record in enumerate(batch):
                         emit_chunk_event(
                             record,
-                            global_index=start + batch_index,
-                            batch_index=batch_index,
+                            global_index=start + index,
+                            batch_index=batch_ordinal,
                             decision="fail_open",
                             fail_open_reason="error",
                         )

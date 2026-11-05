@@ -685,7 +685,7 @@ async def test_search_records_each_chunk_decision_as_a_span_event(monkeypatch):
         "answer_missing",
     ]
     assert [item["chunk.index"] for item in attributes] == [0, 1, 2, 3]
-    assert [item["chunk.batch_index"] for item in attributes] == [0, 1, 2, 3]
+    assert [item["chunk.batch_index"] for item in attributes] == [0, 0, 0, 0]
     assert [item["chunk.resource_id"] for item in attributes] == [
         "kept",
         "off",
@@ -738,7 +738,7 @@ async def test_search_failed_batch_emits_fail_open_events(monkeypatch):
         assert call.args[0] == "relevance.chunk"
         attributes = call.args[1]
         assert attributes["chunk.index"] == index
-        assert attributes["chunk.batch_index"] == index
+        assert attributes["chunk.batch_index"] == 0
         assert attributes["chunk.resource_id"] == records[index].chunk.resource_id
         assert attributes["chunk.decision"] == "fail_open"
         assert attributes["chunk.fail_open_reason"] == "error"
@@ -794,6 +794,7 @@ async def test_search_emits_fail_open_events_for_error_and_deadline(monkeypatch)
         "fail_open",
     ]
     assert [item["chunk.index"] for item in events] == [0, 1, 2]
+    assert [item["chunk.batch_index"] for item in events] == [0, 1, 2]
     assert [item.get("chunk.fail_open_reason") for item in events] == [
         None,
         "error",
@@ -837,6 +838,7 @@ async def test_search_caps_chunk_events_and_reports_omissions(monkeypatch):
     assert len(calls) == 128
     assert [call.args[0] for call in calls[:127]] == ["relevance.chunk"] * 127
     assert calls[126].args[1]["chunk.index"] == 126
+    assert calls[126].args[1]["chunk.batch_index"] == 6
     assert calls[127].args[0] == "relevance.chunks_truncated"
     assert calls[127].args[1] == {"relevance.omitted_count": 73}
 
