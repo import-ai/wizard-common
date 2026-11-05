@@ -72,6 +72,15 @@ def install_transport(monkeypatch, handler):
     return clients
 
 
+def install_span(monkeypatch):
+    span = Mock()
+    span.is_recording.return_value = True
+    monkeypatch.setattr(
+        relevance_module.trace, "get_current_span", lambda context=None: span
+    )
+    return span
+
+
 def retrieval(resource_id):
     return ResourceChunkRetrieval(
         chunk=Chunk(
@@ -629,3 +638,226 @@ async def test_search_batch_timeout_keeps_that_batch_and_following_items(
         assert len(requests) == 2
     finally:
         await checker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_search_records_each_chunk_decision_as_a_span_event(monkeypatch):
+    kept_record = search_record("kept", text="kept chunk text")
+    off_target_record = search_record("off", text="off chunk text")
+    protected_record = search_record(
+        "protected", title="第二大脑", text="protected chunk text"
+    )
+    missing_record = search_record("missing", text="missing chunk text")
+    records = [kept_record, off_target_record, protected_record, missing_record]
+
+    def handle(request):
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "s0": answer(0.1),
+                    "s1": answer(0.9),
+                    "s2": answer(0.9),
+                }
+            },
+        )
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.8))
+    try:
+        result = await checker.filter_search_results("第二大脑", records)
+    finally:
+        await checker.aclose()
+
+    assert result == [kept_record, protected_record, missing_record]
+    calls = span.add_event.call_args_list
+    assert len(calls) == 4
+    attributes = []
+    for call in calls:
+        assert call.args[0] == "relevance.chunk"
+        attributes.append(call.args[1])
+
+    assert [item["chunk.decision"] for item in attributes] == [
+        "kept",
+        "off_target",
+        "title_protected",
+        "answer_missing",
+    ]
+    assert [item["chunk.index"] for item in attributes] == [0, 1, 2, 3]
+    assert [item["chunk.batch_index"] for item in attributes] == [0, 1, 2, 3]
+    assert [item["chunk.resource_id"] for item in attributes] == [
+        "kept",
+        "off",
+        "protected",
+        "missing",
+    ]
+    for record, item in zip(records, attributes):
+        assert item["chunk.chunk_id"] == record.chunk.chunk_id
+        assert item["chunk.chunk_type"] == "doc"
+        assert item["chunk.text_length"] == len(record.chunk.text)
+    assert attributes[0]["chunk.title"] == "kept"
+    assert attributes[2]["chunk.title"] == "第二大脑"
+
+    assert attributes[0]["chunk.off_target_score"] == 0.1
+    assert attributes[0]["chunk.relevant_score"] == pytest.approx(0.9)
+    assert attributes[1]["chunk.off_target_score"] == 0.9
+    assert attributes[1]["chunk.relevant_score"] == pytest.approx(0.1)
+    assert attributes[2]["chunk.off_target_score"] == 0.9
+    assert attributes[2]["chunk.relevant_score"] == pytest.approx(0.1)
+    assert "chunk.off_target_score" not in attributes[3]
+    assert "chunk.relevant_score" not in attributes[3]
+    assert all("chunk.fail_open_reason" not in item for item in attributes)
+
+    # The query only reaches the trace as the protected chunk's title; chunk
+    # text never does.
+    for item in attributes:
+        assert "chunk.text" not in item and "query" not in item
+        assert "chunk.text_length" in item
+    for item in (attributes[0], attributes[1], attributes[3]):
+        assert "第二大脑" not in str(item)
+    for record in records:
+        assert record.chunk.text not in str(attributes)
+
+
+@pytest.mark.asyncio
+async def test_search_failed_batch_emits_fail_open_events(monkeypatch):
+    records = [search_record("one"), search_record("two")]
+    install_transport(monkeypatch, lambda request: httpx.Response(500))
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.8))
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result == records
+    calls = span.add_event.call_args_list
+    assert len(calls) == 2
+    for index, call in enumerate(calls):
+        assert call.args[0] == "relevance.chunk"
+        attributes = call.args[1]
+        assert attributes["chunk.index"] == index
+        assert attributes["chunk.batch_index"] == index
+        assert attributes["chunk.resource_id"] == records[index].chunk.resource_id
+        assert attributes["chunk.decision"] == "fail_open"
+        assert attributes["chunk.fail_open_reason"] == "error"
+        assert "chunk.off_target_score" not in attributes
+        assert "chunk.relevant_score" not in attributes
+
+
+@pytest.mark.asyncio
+async def test_search_emits_fail_open_events_for_error_and_deadline(monkeypatch):
+    call_count = 0
+
+    async def handle(request):
+        nonlocal call_count
+        call_count += 1
+        body = json.loads(request.content)
+        keys = list(body["questions"])
+        if call_count == 2:
+            await asyncio.sleep(10)
+        return httpx.Response(
+            200,
+            json={"answers": {key: answer(0.99) for key in keys}},
+        )
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    records = [search_record(f"r{index}") for index in range(3)]
+    checker = RelevanceChecker(
+        config(
+            search_enabled=True,
+            search_threshold=0.5,
+            search_batch_size=1,
+            search_timeout_sec=0.3,
+            timeout_sec=1.0,
+        )
+    )
+    try:
+        async with asyncio.timeout(2):
+            kept = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert kept == records[1:]
+    calls = span.add_event.call_args_list
+    assert len(calls) == 3
+    events = []
+    for call in calls:
+        assert call.args[0] == "relevance.chunk"
+        events.append(call.args[1])
+
+    assert [item["chunk.decision"] for item in events] == [
+        "off_target",
+        "fail_open",
+        "fail_open",
+    ]
+    assert [item["chunk.index"] for item in events] == [0, 1, 2]
+    assert [item.get("chunk.fail_open_reason") for item in events] == [
+        None,
+        "error",
+        "deadline",
+    ]
+    assert events[0]["chunk.off_target_score"] == 0.99
+    assert events[0]["chunk.relevant_score"] == pytest.approx(0.01)
+    for item in events[1:]:
+        assert "chunk.off_target_score" not in item
+        assert "chunk.relevant_score" not in item
+
+
+@pytest.mark.asyncio
+async def test_search_caps_chunk_events_and_reports_omissions(monkeypatch):
+    records = [search_record(f"r{index}") for index in range(200)]
+
+    def handle(request):
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"answers": {key: answer(0.1) for key in body["questions"]}},
+        )
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(
+        config(
+            search_enabled=True,
+            search_threshold=0.8,
+            search_timeout_sec=10,
+            timeout_sec=10,
+        )
+    )
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result == records
+    calls = span.add_event.call_args_list
+    assert len(calls) == 128
+    assert [call.args[0] for call in calls[:127]] == ["relevance.chunk"] * 127
+    assert calls[126].args[1]["chunk.index"] == 126
+    assert calls[127].args[0] == "relevance.chunks_truncated"
+    assert calls[127].args[1] == {"relevance.omitted_count": 73}
+
+
+@pytest.mark.asyncio
+async def test_search_skips_chunk_events_when_not_recording(monkeypatch):
+    records = [search_record("keep"), search_record("drop")]
+
+    def handle(request):
+        return httpx.Response(
+            200, json={"answers": {"s0": answer(0.1), "s1": answer(0.9)}}
+        )
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    span.is_recording.return_value = False
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.8))
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result == [records[0]]
+    span.add_event.assert_not_called()

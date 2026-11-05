@@ -13,6 +13,10 @@ from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordT
 
 tracer = trace.get_tracer(__name__)
 
+# OTel Python keeps 128 events per span by default; reserve one slot for the
+# truncation event.
+MAX_RELEVANCE_CHUNK_EVENTS = 127
+
 BING_QUESTION = {
     "type": "choice",
     "instructions": "Do these search results answer the user's search request? Prioritize detecting off-target results. If relevance is unclear, choose off_target.",
@@ -194,6 +198,7 @@ class RelevanceChecker:
         partial: bool,
         timeout: float | None = None,
         protected: Callable[[Item], bool] | None = None,
+        on_decision: Callable[[int, float | None, str], None] | None = None,
     ) -> list[Item]:
         questions = {
             f"{answer_prefix}{index}": {
@@ -220,12 +225,20 @@ class RelevanceChecker:
             scores = await self._evaluate(state, questions, timeout=timeout)
         kept: list[Item] = []
         for index, item in enumerate(items):
+            score = scores.get(f"{answer_prefix}{index}")
             if protected is not None and protected(item):
                 kept.append(item)
-                continue
-            score = scores.get(f"{answer_prefix}{index}")
-            if score is None or score < threshold:
+                decision = "title_protected"
+            elif score is None:
                 kept.append(item)
+                decision = "answer_missing"
+            elif score < threshold:
+                kept.append(item)
+                decision = "kept"
+            else:
+                decision = "off_target"
+            if on_decision is not None:
+                on_decision(index, score, decision)
         return kept
 
     @tracer.start_as_current_span("RelevanceChecker.bing")
@@ -312,6 +325,61 @@ class RelevanceChecker:
         if not chunk_records:
             return records
 
+        span = trace.get_current_span()
+        recording = span.is_recording()
+        emitted_chunk_events = 0
+        omitted_chunk_events = 0
+
+        def emit_chunk_event(
+            record: IndexRecord,
+            *,
+            global_index: int,
+            batch_index: int,
+            decision: str,
+            score: float | None = None,
+            fail_open_reason: str | None = None,
+        ) -> None:
+            nonlocal emitted_chunk_events, omitted_chunk_events
+            if emitted_chunk_events >= MAX_RELEVANCE_CHUNK_EVENTS:
+                omitted_chunk_events += 1
+                return
+            chunk = record.chunk
+            attributes: dict[str, object] = {
+                "chunk.index": global_index,
+                "chunk.batch_index": batch_index,
+                "chunk.chunk_id": chunk.chunk_id,
+                "chunk.resource_id": chunk.resource_id,
+                "chunk.chunk_type": chunk.chunk_type.value,
+                "chunk.decision": decision,
+            }
+            if chunk.title:
+                attributes["chunk.title"] = chunk.title
+            if chunk.line_range:
+                attributes["chunk.line_range"] = chunk.line_range
+            if chunk.text is not None:
+                attributes["chunk.text_length"] = len(chunk.text)
+            if score is not None:
+                attributes["chunk.off_target_score"] = score
+                attributes["chunk.relevant_score"] = 1.0 - score
+            if fail_open_reason is not None:
+                attributes["chunk.fail_open_reason"] = fail_open_reason
+            span.add_event("relevance.chunk", attributes)
+            emitted_chunk_events += 1
+
+        def decision_callback(
+            batch: list[IndexRecord], start: int
+        ) -> Callable[[int, float | None, str], None]:
+            def on_decision(index: int, score: float | None, decision: str) -> None:
+                emit_chunk_event(
+                    batch[index],
+                    global_index=start + index,
+                    batch_index=index,
+                    decision=decision,
+                    score=score,
+                )
+
+            return on_decision
+
         threshold = self.config.search_threshold
         deadline = time.monotonic() + self.config.search_timeout_sec
         batch_size = self.config.search_batch_size
@@ -325,6 +393,15 @@ class RelevanceChecker:
             if remaining <= 0:
                 skipped_batches += 1
                 kept_record_ids.update(id(record) for record in batch)
+                if recording:
+                    for batch_index, record in enumerate(batch):
+                        emit_chunk_event(
+                            record,
+                            global_index=start + batch_index,
+                            batch_index=batch_index,
+                            decision="fail_open",
+                            fail_open_reason="deadline",
+                        )
                 continue
             try:
                 kept = await self._filter_items(
@@ -342,13 +419,29 @@ class RelevanceChecker:
                     partial=True,
                     timeout=min(remaining, self.config.timeout_sec),
                     protected=lambda record: _title_matches(query, record.chunk.title),
+                    on_decision=decision_callback(batch, start) if recording else None,
                 )
             except RelevanceError:
                 failed_batches += 1
                 kept = batch
+                if recording:
+                    for batch_index, record in enumerate(batch):
+                        emit_chunk_event(
+                            record,
+                            global_index=start + batch_index,
+                            batch_index=batch_index,
+                            decision="fail_open",
+                            fail_open_reason="error",
+                        )
             else:
                 succeeded_batches += 1
             kept_record_ids.update(id(record) for record in kept)
+
+        if omitted_chunk_events:
+            span.add_event(
+                "relevance.chunks_truncated",
+                {"relevance.omitted_count": omitted_chunk_events},
+            )
 
         if failed_batches + skipped_batches == 0:
             status = "ok"
