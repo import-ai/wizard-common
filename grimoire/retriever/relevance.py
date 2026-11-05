@@ -324,7 +324,12 @@ class RelevanceChecker:
 
     @tracer.start_as_current_span("RelevanceChecker.search")
     async def filter_search_results(
-        self, query: str, records: list[IndexRecord]
+        self,
+        query: str,
+        records: list[IndexRecord],
+        *,
+        deadline: float | None = None,
+        index_offset: int = 0,
     ) -> list[IndexRecord]:
         if not self.config.search_enabled or not records:
             return records
@@ -395,7 +400,7 @@ class RelevanceChecker:
             def on_decision(index: int, score: float | None, decision: str) -> None:
                 emit_chunk_event(
                     batch[index],
-                    global_index=start + index,
+                    global_index=index_offset + start + index,
                     batch_index=batch_ordinal,
                     decision=decision,
                     score=score,
@@ -404,7 +409,8 @@ class RelevanceChecker:
             return on_decision
 
         threshold = self.config.search_threshold
-        deadline = time.monotonic() + self.config.search_timeout_sec
+        if deadline is None:
+            deadline = time.monotonic() + self.config.search_timeout_sec
         batch_size = self.config.search_batch_size
         kept_record_ids: set[int] = set()
         succeeded_batches = 0
@@ -421,7 +427,7 @@ class RelevanceChecker:
                     for index, record in enumerate(batch):
                         emit_chunk_event(
                             record,
-                            global_index=start + index,
+                            global_index=index_offset + start + index,
                             batch_index=batch_ordinal,
                             decision="fail_open",
                             fail_open_reason="deadline",
@@ -456,7 +462,7 @@ class RelevanceChecker:
                     for index, record in enumerate(batch):
                         emit_chunk_event(
                             record,
-                            global_index=start + index,
+                            global_index=index_offset + start + index,
                             batch_index=batch_ordinal,
                             decision="fail_open",
                             fail_open_reason="error",

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import traceback
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -874,6 +875,59 @@ async def test_search_skips_chunk_events_when_not_recording(monkeypatch):
 
     assert result == [records[0]]
     span.add_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_honors_a_caller_deadline_instead_of_resetting_the_budget(
+    monkeypatch,
+):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"answers": {"s0": answer(0.1)}})
+
+    install_transport(monkeypatch, handle)
+    install_span(monkeypatch)
+    records = [search_record("one")]
+    checker = RelevanceChecker(config(search_timeout_sec=10))
+    try:
+        kept = await checker.filter_search_results(
+            "query", records, deadline=time.monotonic() - 1
+        )
+    finally:
+        await checker.aclose()
+
+    assert kept == records
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_search_offsets_chunk_indices_across_pages(monkeypatch):
+    def handle(request):
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"answers": {key: answer(0.1) for key in body["questions"]}},
+        )
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    records = [search_record("one"), search_record("two")]
+    checker = RelevanceChecker(config(search_batch_size=1))
+    try:
+        kept = await checker.filter_search_results("query", records, index_offset=5)
+    finally:
+        await checker.aclose()
+
+    assert kept == records
+    chunk_events = [
+        call.args[1]
+        for call in span.add_event.call_args_list
+        if call.args[0] == "relevance.chunk"
+    ]
+    assert [attributes["chunk.index"] for attributes in chunk_events] == [5, 6]
+    assert [attributes["chunk.batch_index"] for attributes in chunk_events] == [0, 1]
 
 
 @pytest.mark.asyncio
