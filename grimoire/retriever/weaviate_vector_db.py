@@ -572,6 +572,7 @@ class WeaviateVectorDB:
         limit: int,
         conversation_ids: list[str] | None = None,
         exclude_conversation_ids: list[str] | None = None,
+        resource_ids: list[str] | None = None,
     ) -> List[IndexRecord]:
         condition = Condition(
             conversation_ids=conversation_ids,
@@ -579,6 +580,7 @@ class WeaviateVectorDB:
             namespace_id=namespace_id,
             user_id=user_id,
             record_type=record_type.value if record_type else None,
+            resource_ids=resource_ids,
         )
 
         hits = await self._hybrid_query(
