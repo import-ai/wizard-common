@@ -156,7 +156,7 @@ def test_search_defaults_and_validation():
     defaults = RelevanceConfig()
     assert defaults.search_enabled
     assert defaults.search_threshold == 0.6
-    assert defaults.search_batch_size == 20
+    assert defaults.search_batch_size == 10
     assert defaults.search_timeout_sec == 1.0
     assert RelevanceConfig(search_enabled=False).search_enabled is False
     for overrides in [
@@ -849,7 +849,7 @@ async def test_search_caps_chunk_events_and_reports_omissions(monkeypatch):
     assert len(calls) == 128
     assert [call.args[0] for call in calls[:127]] == ["relevance.chunk"] * 127
     assert calls[126].args[1]["chunk.index"] == 126
-    assert calls[126].args[1]["chunk.batch_index"] == 6
+    assert calls[126].args[1]["chunk.batch_index"] == 12
     assert calls[127].args[0] == "relevance.chunks_truncated"
     assert calls[127].args[1] == {"relevance.omitted_count": 73}
 

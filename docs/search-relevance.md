@@ -18,7 +18,7 @@ Both applications read the same `OBW_TOOLS_RELEVANCE_*` environment variables. T
 | `BING_THRESHOLD` | `0.1` | Reject when the off-target score is greater than or equal to this value |
 | `RESOURCE_THRESHOLD` | unset | Separately calibrated threshold, required when resource checks are enabled |
 | `SEARCH_THRESHOLD` | `0.6` | Reject when the off-target score is greater than or equal to this value |
-| `SEARCH_BATCH_SIZE` | `20` | Results judged per request, between 1 and 100 |
+| `SEARCH_BATCH_SIZE` | `10` | Results judged per request, between 1 and 100. The System One decision API accepts at most 16 questions per request, so keep this at 16 or below |
 | `SEARCH_TIMEOUT_SEC` | `1` | Total relevance budget for one search response |
 
 Bing and resource checks can remain disabled with endpoint and model fields unset. Explicitly enabling either requires an HTTP(S) base URL and a model, and resource checks also require an explicit threshold. Search checks are enabled by default: without both base URL and model, search relevance is a no-op that returns every result and records an `unconfigured` status. Supplying only one of base URL and model fails validation, as does enabling a check with invalid values.
