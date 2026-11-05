@@ -1,6 +1,6 @@
 # Optional search relevance checks
 
-Wizard and Wizard Pro share this implementation. Bing and resource checks are disabled by default. Search checks are enabled by default with a `0.8` threshold, but a deployment without a relevance endpoint and model starts normally and performs no relevance calls, so existing deployments need no new model service or credentials. The backend's search and picker consume this endpoint in 20-row pages, so each record they consider has been judged; the open API's chunk search returns filtered results on its own page size. The crawler service continues to return its original search response format.
+Wizard and Wizard Pro share this implementation. Bing and resource checks are disabled by default. Search checks are enabled by default with a `0.6` threshold, but a deployment without a relevance endpoint and model starts normally and performs no relevance calls, so existing deployments need no new model service or credentials. The backend's search and picker consume this endpoint in 20-row pages, so each record they consider has been judged; the open API's chunk search returns filtered results on its own page size. The crawler service continues to return its original search response format.
 
 ## Configuration
 
@@ -17,7 +17,7 @@ Both applications read the same `OBW_TOOLS_RELEVANCE_*` environment variables. T
 | `TIMEOUT_SEC` | `2` | HTTP timeout in seconds |
 | `BING_THRESHOLD` | `0.1` | Reject when the off-target score is greater than or equal to this value |
 | `RESOURCE_THRESHOLD` | unset | Separately calibrated threshold, required when resource checks are enabled |
-| `SEARCH_THRESHOLD` | `0.8` | Reject when the off-target score is greater than or equal to this value |
+| `SEARCH_THRESHOLD` | `0.6` | Reject when the off-target score is greater than or equal to this value |
 | `SEARCH_BATCH_SIZE` | `20` | Results judged per request, between 1 and 100 |
 | `SEARCH_TIMEOUT_SEC` | `1` | Total relevance budget for one search response |
 

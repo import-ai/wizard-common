@@ -106,7 +106,7 @@ class RelevanceConfig(BaseModel):
     resource_enabled: bool = False
     resource_threshold: float | None = Field(default=None, ge=0, le=1)
     search_enabled: bool = True
-    search_threshold: float = Field(default=0.8, ge=0, le=1)
+    search_threshold: float = Field(default=0.6, ge=0, le=1)
     search_batch_size: int = Field(default=20, ge=1, le=100)
     search_timeout_sec: float = Field(default=1.0, gt=0, allow_inf_nan=False)
 
