@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import weaviate.classes as wvc
+from weaviate.collections.filters import _FilterToREST
 from weaviate.exceptions import WeaviateQueryError
 
 import wizard_common.grimoire.retriever.weaviate_vector_db as vector_db_module
@@ -245,3 +246,74 @@ async def test_message_path_uses_split_message_properties():
         "message_content_gse"
         not in collection.query.hybrid.call_args.kwargs["query_properties"]
     )
+
+
+@pytest.mark.asyncio
+async def test_offset_slices_fused_ranking_after_fusion():
+    ids = [uuid.UUID(int=index) for index in range(1, 7)]
+    db, collection = make_db(
+        hybrid_objects=[
+            FakeObject(ids[0], {"chunk_title": "h0"}, FakeMetadata(0.50)),
+            FakeObject(ids[1], {"chunk_title": "h1"}, FakeMetadata(0.40)),
+            FakeObject(ids[2], {"chunk_title": "hb"}, FakeMetadata(0.305)),
+            FakeObject(ids[3], {"chunk_title": "ha"}, FakeMetadata(0.30)),
+            FakeObject(ids[4], {"chunk_title": "h4"}, FakeMetadata(0.20)),
+            FakeObject(ids[5], {"chunk_title": "h5"}, FakeMetadata(0.10)),
+        ],
+        bm25_objects=[
+            FakeObject(ids[3], {"chunk_title": "ha"}, FakeMetadata(9.0)),
+        ],
+    )
+
+    hits = await db._hybrid_query("space", "标题", CONDITION, limit=4, offset=2)
+
+    assert collection.query.hybrid.call_args.kwargs["limit"] == 6
+    assert collection.query.bm25.call_args.kwargs["limit"] == 6
+    assert [props["chunk_title"] for props, _ in hits] == ["ha", "hb", "h4", "h5"]
+
+
+@pytest.mark.asyncio
+async def test_both_legs_receive_the_same_filters():
+    db, collection = make_db()
+    condition = Condition(
+        namespace_id="space", user_id="user", resource_ids=["r1", "r2"]
+    )
+
+    await db._hybrid_query("space", "标题编码", condition, limit=3)
+
+    hybrid_filters = collection.query.hybrid.call_args.kwargs["filters"]
+    bm25_filters = collection.query.bm25.call_args.kwargs["filters"]
+    assert hybrid_filters is bm25_filters
+    assert _FilterToREST.convert(hybrid_filters) == _FilterToREST.convert(bm25_filters)
+
+
+@pytest.mark.asyncio
+async def test_non_tenant_hybrid_failure_reraises():
+    noise = FakeObject(uuid.uuid4(), {"chunk_title": "噪声"}, FakeMetadata(1.0))
+    db, collection = make_db(bm25_objects=[noise])
+    collection.query.hybrid.side_effect = WeaviateQueryError("hybrid exploded", "grpc")
+
+    with pytest.raises(WeaviateQueryError, match="hybrid exploded"):
+        await db._hybrid_query("space", "标题", CONDITION, limit=5)
+
+
+@pytest.mark.asyncio
+async def test_embedding_failure_reraises_even_when_gse_succeeds():
+    noise = FakeObject(uuid.uuid4(), {"chunk_title": "噪声"}, FakeMetadata(1.0))
+    db, collection = make_db(bm25_objects=[noise])
+    db._embed = AsyncMock(side_effect=RuntimeError("embedding exploded"))
+
+    with pytest.raises(RuntimeError, match="embedding exploded"):
+        await db._hybrid_query("space", "标题", CONDITION, limit=5)
+
+    collection.query.bm25.assert_awaited()
+    collection.query.hybrid.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_embedding_tenant_not_found_returns_empty():
+    db, collection = make_db()
+    db._embed = AsyncMock(side_effect=WeaviateQueryError("tenant not found", "grpc"))
+
+    assert await db._hybrid_query("space", "标题", CONDITION, limit=5) == []
+    collection.query.hybrid.assert_not_awaited()
