@@ -250,15 +250,16 @@ async def test_message_path_uses_split_message_properties():
 
 @pytest.mark.asyncio
 async def test_offset_slices_fused_ranking_after_fusion():
+    gse_bonus = GSE_LEG_WEIGHT / RRF_K
     ids = [uuid.UUID(int=index) for index in range(1, 7)]
     db, collection = make_db(
         hybrid_objects=[
-            FakeObject(ids[0], {"chunk_title": "h0"}, FakeMetadata(0.50)),
-            FakeObject(ids[1], {"chunk_title": "h1"}, FakeMetadata(0.40)),
-            FakeObject(ids[2], {"chunk_title": "hb"}, FakeMetadata(0.305)),
-            FakeObject(ids[3], {"chunk_title": "ha"}, FakeMetadata(0.30)),
-            FakeObject(ids[4], {"chunk_title": "h4"}, FakeMetadata(0.20)),
-            FakeObject(ids[5], {"chunk_title": "h5"}, FakeMetadata(0.10)),
+            FakeObject(ids[0], {"chunk_title": "h0"}, FakeMetadata(5 * gse_bonus)),
+            FakeObject(ids[1], {"chunk_title": "h1"}, FakeMetadata(4 * gse_bonus)),
+            FakeObject(ids[2], {"chunk_title": "hb"}, FakeMetadata(2.5 * gse_bonus)),
+            FakeObject(ids[3], {"chunk_title": "ha"}, FakeMetadata(2 * gse_bonus)),
+            FakeObject(ids[4], {"chunk_title": "h4"}, FakeMetadata(1.5 * gse_bonus)),
+            FakeObject(ids[5], {"chunk_title": "h5"}, FakeMetadata(1 * gse_bonus)),
         ],
         bm25_objects=[
             FakeObject(ids[3], {"chunk_title": "ha"}, FakeMetadata(9.0)),
@@ -269,7 +270,16 @@ async def test_offset_slices_fused_ranking_after_fusion():
 
     assert collection.query.hybrid.call_args.kwargs["limit"] == 6
     assert collection.query.bm25.call_args.kwargs["limit"] == 6
+    # The rank-0 GSE bonus lifts ha above hb; the slice is taken after fusion.
     assert [props["chunk_title"] for props, _ in hits] == ["ha", "hb", "h4", "h5"]
+
+
+def filter_leaves(node):
+    return (
+        [leaf for child in node["operands"] for leaf in filter_leaves(child)]
+        if "operands" in node
+        else [node]
+    )
 
 
 @pytest.mark.asyncio
@@ -278,13 +288,32 @@ async def test_both_legs_receive_the_same_filters():
     condition = Condition(
         namespace_id="space", user_id="user", resource_ids=["r1", "r2"]
     )
+    expected = _FilterToREST.convert(condition.to_weaviate_filters())
 
     await db._hybrid_query("space", "标题编码", condition, limit=3)
 
     hybrid_filters = collection.query.hybrid.call_args.kwargs["filters"]
     bm25_filters = collection.query.bm25.call_args.kwargs["filters"]
     assert hybrid_filters is bm25_filters
-    assert _FilterToREST.convert(hybrid_filters) == _FilterToREST.convert(bm25_filters)
+    for filters in (hybrid_filters, bm25_filters):
+        wire = _FilterToREST.convert(filters)
+        assert wire == expected
+        leaves = filter_leaves(wire)
+        assert {
+            "operator": "Equal",
+            "path": ["namespace_id"],
+            "valueText": "space",
+        } in leaves
+        assert {
+            "operator": "Equal",
+            "path": ["user_id"],
+            "valueText": "user",
+        } in leaves
+        assert {
+            "operator": "ContainsAny",
+            "path": ["chunk_resource_id"],
+            "valueTextArray": ["r1", "r2"],
+        } in leaves
 
 
 @pytest.mark.asyncio
