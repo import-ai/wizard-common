@@ -46,13 +46,13 @@ tracer = trace.get_tracer(__name__)
 COLLECTION_NAME = "omnibox_index"
 MESSAGE_CHUNK_SIZE = 2000
 WORD_QUERY_PROPERTIES = [
-    "chunk_title",
+    "chunk_title^3",
     "chunk_text",
     "message_content",
     "resource_tag_names",
 ]
 GSE_QUERY_PROPERTIES = [
-    "chunk_title_gse",
+    "chunk_title_gse^3",
     "chunk_text_gse",
     "message_content_gse",
     "resource_tag_names_gse",
@@ -320,7 +320,10 @@ class WeaviateVectorDB:
 
     @property
     def retrieval_signature(self) -> str:
-        return "split-thresholds-v1:" + self.config.search_thresholds.model_dump_json()
+        return (
+            "split-thresholds-title3-v2:"
+            + self.config.search_thresholds.model_dump_json()
+        )
 
     @tracer.start_as_current_span("WeaviateVectorDB._hybrid_query")
     async def _retrieve_window(

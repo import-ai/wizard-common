@@ -63,7 +63,7 @@ def make_db(vector_objects=(), word_objects=(), gse_objects=(), thresholds=None)
     async def bm25(**kwargs):
         objects = (
             gse_objects
-            if kwargs["query_properties"][0].endswith("_gse")
+            if kwargs["query_properties"][0].split("^")[0].endswith("_gse")
             else word_objects
         )
         return QueryResponse(list(objects)[: kwargs["limit"]])
@@ -85,6 +85,12 @@ async def test_ascii_query_runs_two_native_legs_once_without_diagnostic_probes(q
     collection.query.hybrid.assert_not_called()
     collection.query.near_vector.assert_awaited_once()
     collection.query.bm25.assert_awaited_once()
+    assert collection.query.bm25.call_args.kwargs["query_properties"] == [
+        "chunk_title^3",
+        "chunk_text",
+        "message_content",
+        "resource_tag_names",
+    ]
     db._embed.assert_awaited_once_with(query)
     assert collection.query.near_vector.call_args.kwargs["distance"] == 0.5
     assert collection.query.near_vector.call_args.kwargs["limit"] == 21
@@ -98,6 +104,12 @@ async def test_cjk_leg_receives_only_cjk_and_has_independent_threshold(query):
     calls = collection.query.bm25.call_args_list
     assert calls[0].kwargs["query"] == query
     assert calls[1].kwargs["query"] == "标题编码"
+    assert calls[1].kwargs["query_properties"] == [
+        "chunk_title_gse^3",
+        "chunk_text_gse",
+        "message_content_gse",
+        "resource_tag_names_gse",
+    ]
     assert window.candidates[0].passed_legs == ["gse"]
     assert window.candidates[0].gse_bm25_score == 0.1
 

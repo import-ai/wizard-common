@@ -5,6 +5,16 @@ Nonempty searches execute two independent branches concurrently: vector retrieva
 GSE BM25 over the non-ASCII-alphanumeric portion. Every branch retains identical
 tenant, ACL, record type and resource filters.
 
+## Field weights
+
+WORD uses `chunk_title^3` and GSE uses `chunk_title_gse^3`; all other fields
+retain their implicit weight of 1. This is a query-time BM25F property weight, not
+a multiplier on the final score, and requires no reindexing or extra query.
+Title matches can rise within each keyword branch before RRF. Body-only matches
+are not excluded by title boosting. Thresholds and diagnostic keyword scores refer
+to the raw BM25F result of this weighted query, not an unweighted diagnostic probe.
+The cache retrieval signature is versioned with this weighting policy.
+
 ## Initial defaults
 
 - `vector.search_thresholds.max_distance = 0.50`: inclusive native vector distance
