@@ -107,7 +107,8 @@ class RelevanceConfig(BaseModel):
     resource_threshold: float | None = Field(default=None, ge=0, le=1)
     search_enabled: bool = True
     search_threshold: float = Field(default=0.5, ge=0, le=1)
-    search_batch_size: int = Field(default=10, ge=1, le=100)
+    # System One accepts at most 16 questions per request.
+    search_batch_size: int = Field(default=16, ge=1, le=16)
     search_timeout_sec: float = Field(default=3.0, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")

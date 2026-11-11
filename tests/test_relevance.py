@@ -25,8 +25,10 @@ from wizard_common.grimoire.entity.tools import PrivateSearchTool
 from wizard_common.grimoire.retriever import relevance as relevance_module
 from wizard_common.grimoire.retriever.relevance import (
     BING_QUESTION,
+    SEARCH_BATCH_CONCURRENCY,
     RelevanceChecker,
     RelevanceError,
+    SearchFilterResult,
 )
 from wizard_common.grimoire.retriever.resource_search import ResourceSearch
 from wizard_common.grimoire.retriever.searxng import SearXNGRetrieval
@@ -157,14 +159,15 @@ def test_search_defaults_and_validation():
     defaults = RelevanceConfig()
     assert defaults.search_enabled
     assert defaults.search_threshold == 0.5
-    assert defaults.search_batch_size == 10
+    assert defaults.search_batch_size == 16
     assert defaults.search_timeout_sec == 3.0
     assert RelevanceConfig(search_enabled=False).search_enabled is False
+    assert RelevanceConfig(search_batch_size=16).search_batch_size == 16
     for overrides in [
         {"base_url": "https://judge.invalid/v1"},
         {"model": "decision-test"},
         {"search_batch_size": 0},
-        {"search_batch_size": 101},
+        {"search_batch_size": 17},
         {"search_timeout_sec": 0},
         {"search_timeout_sec": float("inf")},
         {"search_threshold": -0.1},
@@ -181,7 +184,7 @@ def test_search_env_config(monkeypatch):
         "BASE_URL": "http://localhost:9000/v1",
         "MODEL": "local-decision",
         "SEARCH_THRESHOLD": "0.8",
-        "SEARCH_BATCH_SIZE": "10",
+        "SEARCH_BATCH_SIZE": "16",
         "SEARCH_TIMEOUT_SEC": "1.5",
     }.items():
         monkeypatch.setenv("TEST_TOOLS_RELEVANCE_" + name, value)
@@ -192,7 +195,7 @@ def test_search_env_config(monkeypatch):
     ).load()
     assert settings.relevance.search_enabled
     assert settings.relevance.search_threshold == 0.8
-    assert settings.relevance.search_batch_size == 10
+    assert settings.relevance.search_batch_size == 16
     assert settings.relevance.search_timeout_sec == 1.5
 
 
@@ -226,7 +229,8 @@ async def test_disabled_checks_make_no_client_or_network_request(monkeypatch):
     resources = [retrieval("keep")]
     assert await checker.filter_resources("query", resources) is resources
     records = [search_record("keep")]
-    assert await checker.filter_search_results("query", records) is records
+    result = await checker.filter_search_results("query", records)
+    assert result.kept == records and result.pending == []
     await checker.aclose()
 
 
@@ -245,7 +249,8 @@ async def test_enabled_search_without_endpoint_is_a_network_free_noop(monkeypatc
     )
     checker = RelevanceChecker(RelevanceConfig())
     records = [search_record("keep"), message_record("message")]
-    assert await checker.filter_search_results("query", records) is records
+    result = await checker.filter_search_results("query", records)
+    assert result.kept == records and result.pending == []
     span.set_attributes.assert_called_once_with(
         {"relevance.status": "unconfigured", "relevance.input_count": 2}
     )
@@ -497,8 +502,9 @@ async def test_search_sends_full_chunk_text_deduplicates_and_keeps_messages(
     install_transport(monkeypatch, handle)
     checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
     try:
-        kept = await checker.filter_search_results("query", records)
-        assert kept == [duplicate, records[2]]
+        result = await checker.filter_search_results("query", records)
+        assert result.kept == [duplicate, records[2]]
+        assert result.pending == []
         assert len(requests) == 1
     finally:
         await checker.aclose()
@@ -525,39 +531,138 @@ async def test_search_title_guard_keeps_matches_in_both_directions(monkeypatch):
     install_transport(monkeypatch, handle)
     checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.8))
     try:
-        kept = await checker.filter_search_results("第二大脑", [forward, unrelated])
-        assert kept == [forward]
-        kept = await checker.filter_search_results("打造第二大脑笔记", [reverse])
-        assert kept == [reverse]
+        result = await checker.filter_search_results("第二大脑", [forward, unrelated])
+        assert result.kept == [forward]
+        assert result.pending == []
+        result = await checker.filter_search_results("打造第二大脑笔记", [reverse])
+        assert result.kept == [reverse]
+        assert result.pending == []
     finally:
         await checker.aclose()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "answers,kept_indexes",
-    [
-        ({"s0": answer(0.9)}, [1]),
-        ({"s0": {"probabilities": {"off_target": 0.9}}}, [0, 1]),
-        ({"s0": answer(-0.1)}, [0, 1]),
-        ({"s0": answer(0.9), "s1": answer(0.1)}, [1]),
-        ({"s0": answer(0.9), "s1": answer(0.9), "unexpected": answer(0.9)}, []),
-    ],
-)
-async def test_search_invalid_answers_keep_only_the_affected_items(
-    monkeypatch, answers, kept_indexes
-):
-    records = [search_record("one"), search_record("two")]
+async def test_search_classifies_kept_off_target_and_pending(monkeypatch):
+    kept_record = search_record("kept")
+    off_record = search_record("off")
+    missing_record = search_record("missing")
+    message = message_record("message")
+    records = [kept_record, message, off_record, missing_record]
 
-    install_transport(
-        monkeypatch, lambda request: httpx.Response(200, json={"answers": answers})
-    )
+    def handle(request):
+        body = json.loads(request.content)
+        scores = {"kept": 0.1, "off": 0.9}
+        answers = {
+            f"s{item['id']}": answer(scores[item["title"]])
+            for item in body["state"]["results"]
+            if item["title"] in scores
+        }
+        return httpx.Response(200, json={"answers": answers})
+
+    install_transport(monkeypatch, handle)
     checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
     try:
-        kept = await checker.filter_search_results("query", records)
-        assert kept == [records[index] for index in kept_indexes]
+        result = await checker.filter_search_results("query", records)
     finally:
         await checker.aclose()
+
+    assert isinstance(result, SearchFilterResult)
+    assert result.kept == [kept_record, message]
+    assert result.pending == [missing_record]
+
+
+@pytest.mark.asyncio
+async def test_search_retries_answer_missing_items_once(monkeypatch):
+    records = [search_record("one"), search_record("miss")]
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        retry = len(requests) > 1
+        answers = {
+            f"s{item['id']}": answer(0.1)
+            for item in body["state"]["results"]
+            if retry or item["title"] != "miss"
+        }
+        return httpx.Response(200, json={"answers": answers})
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result.kept == records
+    assert result.pending == []
+    assert len(requests) == 2
+    assert [item["title"] for item in requests[1]["state"]["results"]] == ["miss"]
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert [item["chunk.decision"] for item in events] == ["kept", "kept"]
+    assert len({item["chunk.chunk_id"] for item in events}) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_still_missing_after_one_retry_is_pending(monkeypatch):
+    records = [search_record("one"), search_record("miss")]
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        answers = {
+            f"s{item['id']}": answer(0.1)
+            for item in body["state"]["results"]
+            if item["title"] != "miss"
+        }
+        return httpx.Response(200, json={"answers": answers})
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result.kept == [records[0]]
+    assert result.pending == [records[1]]
+    assert len(requests) == 2
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert [item["chunk.decision"] for item in events] == ["kept", "pending"]
+    assert events[1]["chunk.pending_reason"] == "answer_missing"
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_invalid_answer_becomes_pending_after_retry(monkeypatch):
+    bad_record = search_record("bad")
+    good_record = search_record("good")
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        answers = {}
+        for item in body["state"]["results"]:
+            if item["title"] == "good":
+                answers[f"s{item['id']}"] = answer(0.1)
+            else:
+                answers[f"s{item['id']}"] = {"probabilities": {"off_target": 0.9}}
+        return httpx.Response(200, json={"answers": answers})
+
+    install_transport(monkeypatch, handle)
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
+    try:
+        result = await checker.filter_search_results("query", [bad_record, good_record])
+    finally:
+        await checker.aclose()
+
+    assert result.kept == [good_record]
+    assert result.pending == [bad_record]
+    assert len(requests) == 2
 
 
 @pytest.mark.asyncio
@@ -570,14 +675,26 @@ async def test_search_invalid_answers_keep_only_the_affected_items(
         lambda request: httpx.Response(200, json={}),
     ],
 )
-async def test_search_unparseable_response_keeps_every_result(monkeypatch, response):
+async def test_search_unparseable_response_moves_every_result_to_pending(
+    monkeypatch, response
+):
     records = [search_record("one"), search_record("two")]
-    install_transport(monkeypatch, response)
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return response(request)
+
+    install_transport(monkeypatch, handle)
     checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
     try:
-        assert await checker.filter_search_results("query", records) == records
+        result = await checker.filter_search_results("query", records)
     finally:
         await checker.aclose()
+
+    assert result.kept == []
+    assert result.pending == records
+    assert len(requests) == 2
 
 
 @pytest.mark.asyncio
@@ -603,53 +720,99 @@ async def test_search_splits_batches(monkeypatch):
         config(search_enabled=True, search_threshold=0.5, search_batch_size=2)
     )
     try:
-        kept = await checker.filter_search_results("query", records)
-        assert kept == records
-        assert batch_sizes == [2, 2, 1]
+        result = await checker.filter_search_results("query", records)
+        assert result.kept == records
+        assert result.pending == []
+        assert sorted(batch_sizes) == [1, 2, 2]
     finally:
         await checker.aclose()
 
 
 @pytest.mark.asyncio
-async def test_search_batch_timeout_keeps_that_batch_and_following_items(
-    monkeypatch,
-):
-    requests = []
-    call_count = 0
+async def test_search_sends_at_most_sixteen_questions_per_batch(monkeypatch):
+    records = [search_record(f"r{index}") for index in range(17)]
+    batch_sizes = []
 
-    async def handle(request):
-        nonlocal call_count
-        call_count += 1
+    def handle(request):
         body = json.loads(request.content)
-        keys = list(body["questions"])
-        requests.append(keys)
-        if call_count == 2:
-            await asyncio.sleep(10)
+        batch_sizes.append(len(body["state"]["results"]))
         return httpx.Response(
             200,
-            json={"answers": {key: answer(0.99) for key in keys}},
+            json={"answers": {key: answer(0.1) for key in body["questions"]}},
         )
 
     install_transport(monkeypatch, handle)
-    records = [search_record(f"r{index}") for index in range(3)]
-    checker = RelevanceChecker(
-        config(
-            search_enabled=True,
-            search_threshold=0.5,
-            search_batch_size=1,
-            search_timeout_sec=0.3,
-            timeout_sec=1.0,
-        )
-    )
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
     try:
-        async with asyncio.timeout(2):
-            kept = await checker.filter_search_results("query", records)
-        # First batch is dropped; the timed-out batch and the ones that never
-        # ran keep their results.
-        assert kept == records[1:]
-        assert len(requests) == 2
+        result = await checker.filter_search_results("query", records)
     finally:
         await checker.aclose()
+
+    assert result.kept == records
+    assert result.pending == []
+    assert sorted(batch_sizes) == [1, 16]
+
+
+@pytest.mark.asyncio
+async def test_search_runs_at_most_two_batches_concurrently(monkeypatch):
+    records = [search_record(f"r{index}") for index in range(6)]
+    active = 0
+    max_active = 0
+
+    async def handle(request):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"answers": {key: answer(0.1) for key in body["questions"]}},
+        )
+
+    install_transport(monkeypatch, handle)
+    checker = RelevanceChecker(
+        config(search_enabled=True, search_threshold=0.5, search_batch_size=1)
+    )
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result.kept == records
+    assert result.pending == []
+    assert max_active == SEARCH_BATCH_CONCURRENCY
+
+
+@pytest.mark.asyncio
+async def test_search_failed_batch_is_retried_once_then_pending(monkeypatch):
+    records = [search_record("one"), search_record("two")]
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(500)
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result.kept == []
+    assert result.pending == records
+    assert len(requests) == 2
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert [item["chunk.decision"] for item in events] == ["pending", "pending"]
+    assert {item["chunk.pending_reason"] for item in events} == {"error"}
+    assert len(events) == 2
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes["relevance.status"] == "unavailable"
+    assert attributes["relevance.retried_batches"] == 1
+    assert attributes["relevance.failed_batches"] == 1
 
 
 @pytest.mark.asyncio
@@ -663,16 +826,14 @@ async def test_search_records_each_chunk_decision_as_a_span_event(monkeypatch):
     records = [kept_record, off_target_record, protected_record, missing_record]
 
     def handle(request):
-        return httpx.Response(
-            200,
-            json={
-                "answers": {
-                    "s0": answer(0.1),
-                    "s1": answer(0.9),
-                    "s2": answer(0.9),
-                }
-            },
-        )
+        body = json.loads(request.content)
+        scores = {"kept": 0.1, "off": 0.9, "第二大脑": 0.9}
+        answers = {
+            f"s{item['id']}": answer(scores[item["title"]])
+            for item in body["state"]["results"]
+            if item["title"] in scores
+        }
+        return httpx.Response(200, json={"answers": answers})
 
     install_transport(monkeypatch, handle)
     span = install_span(monkeypatch)
@@ -682,7 +843,8 @@ async def test_search_records_each_chunk_decision_as_a_span_event(monkeypatch):
     finally:
         await checker.aclose()
 
-    assert result == [kept_record, protected_record, missing_record]
+    assert result.kept == [kept_record, protected_record]
+    assert result.pending == [missing_record]
     calls = span.add_event.call_args_list
     assert len(calls) == 4
     attributes = []
@@ -694,8 +856,9 @@ async def test_search_records_each_chunk_decision_as_a_span_event(monkeypatch):
         "kept",
         "off_target",
         "title_protected",
-        "answer_missing",
+        "pending",
     ]
+    assert attributes[3]["chunk.pending_reason"] == "answer_missing"
     assert [item["chunk.index"] for item in attributes] == [0, 1, 2, 3]
     assert [item["chunk.batch_index"] for item in attributes] == [0, 0, 0, 0]
     assert [item["chunk.resource_id"] for item in attributes] == [
@@ -720,6 +883,9 @@ async def test_search_records_each_chunk_decision_as_a_span_event(monkeypatch):
     assert "chunk.off_target_score" not in attributes[3]
     assert "chunk.relevant_score" not in attributes[3]
     assert all("chunk.fail_open_reason" not in item for item in attributes)
+    assert "chunk.pending_reason" not in attributes[0]
+    assert "chunk.pending_reason" not in attributes[1]
+    assert "chunk.pending_reason" not in attributes[2]
 
     # The query only reaches the trace as the protected chunk's title; chunk
     # text never does.
@@ -733,66 +899,67 @@ async def test_search_records_each_chunk_decision_as_a_span_event(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_failed_batch_emits_fail_open_events(monkeypatch):
-    records = [search_record("one"), search_record("two")]
-    install_transport(monkeypatch, lambda request: httpx.Response(500))
+async def test_search_title_protection_survives_batch_failure(monkeypatch):
+    protected_record = search_record("protected", title="query-plan")
+    plain_record = search_record("plain")
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(500)
+
+    install_transport(monkeypatch, handle)
     span = install_span(monkeypatch)
-    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.8))
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
+    try:
+        result = await checker.filter_search_results(
+            "query", [protected_record, plain_record]
+        )
+    finally:
+        await checker.aclose()
+
+    assert result.kept == [protected_record]
+    assert result.pending == [plain_record]
+    assert len(requests) == 2
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert [item["chunk.decision"] for item in events] == [
+        "title_protected",
+        "pending",
+    ]
+    assert events[1]["chunk.pending_reason"] == "error"
+    assert "chunk.pending_reason" not in events[0]
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes["relevance.status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_search_emits_one_final_decision_event_per_chunk(monkeypatch):
+    records = [search_record("r0"), search_record("r1"), search_record("r2")]
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        item = body["state"]["results"][0]
+        if item["title"] == "r1":
+            return httpx.Response(500)
+        score = 0.1 if item["title"] == "r0" else 0.9
+        return httpx.Response(200, json={"answers": {"s0": answer(score)}})
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(
+        config(search_enabled=True, search_threshold=0.5, search_batch_size=1)
+    )
     try:
         result = await checker.filter_search_results("query", records)
     finally:
         await checker.aclose()
 
-    assert result == records
-    calls = span.add_event.call_args_list
-    assert len(calls) == 2
-    for index, call in enumerate(calls):
-        assert call.args[0] == "relevance.chunk"
-        attributes = call.args[1]
-        assert attributes["chunk.index"] == index
-        assert attributes["chunk.batch_index"] == 0
-        assert attributes["chunk.resource_id"] == records[index].chunk.resource_id
-        assert attributes["chunk.decision"] == "fail_open"
-        assert attributes["chunk.fail_open_reason"] == "error"
-        assert "chunk.off_target_score" not in attributes
-        assert "chunk.relevant_score" not in attributes
-
-
-@pytest.mark.asyncio
-async def test_search_emits_fail_open_events_for_error_and_deadline(monkeypatch):
-    call_count = 0
-
-    async def handle(request):
-        nonlocal call_count
-        call_count += 1
-        body = json.loads(request.content)
-        keys = list(body["questions"])
-        if call_count == 2:
-            await asyncio.sleep(10)
-        return httpx.Response(
-            200,
-            json={"answers": {key: answer(0.99) for key in keys}},
-        )
-
-    install_transport(monkeypatch, handle)
-    span = install_span(monkeypatch)
-    records = [search_record(f"r{index}") for index in range(3)]
-    checker = RelevanceChecker(
-        config(
-            search_enabled=True,
-            search_threshold=0.5,
-            search_batch_size=1,
-            search_timeout_sec=0.3,
-            timeout_sec=1.0,
-        )
-    )
-    try:
-        async with asyncio.timeout(2):
-            kept = await checker.filter_search_results("query", records)
-    finally:
-        await checker.aclose()
-
-    assert kept == records[1:]
+    assert result.kept == [records[0]]
+    assert result.pending == [records[1]]
+    # The failed batch is retried once.
+    assert len(requests) == 4
     calls = span.add_event.call_args_list
     assert len(calls) == 3
     events = []
@@ -801,22 +968,110 @@ async def test_search_emits_fail_open_events_for_error_and_deadline(monkeypatch)
         events.append(call.args[1])
 
     assert [item["chunk.decision"] for item in events] == [
+        "kept",
+        "pending",
         "off_target",
-        "fail_open",
-        "fail_open",
     ]
     assert [item["chunk.index"] for item in events] == [0, 1, 2]
     assert [item["chunk.batch_index"] for item in events] == [0, 1, 2]
-    assert [item.get("chunk.fail_open_reason") for item in events] == [
+    assert [item.get("chunk.pending_reason") for item in events] == [
         None,
         "error",
-        "deadline",
+        None,
     ]
-    assert events[0]["chunk.off_target_score"] == 0.99
-    assert events[0]["chunk.relevant_score"] == pytest.approx(0.01)
-    for item in events[1:]:
-        assert "chunk.off_target_score" not in item
-        assert "chunk.relevant_score" not in item
+    assert len({item["chunk.chunk_id"] for item in events}) == 3
+
+
+@pytest.mark.asyncio
+async def test_search_preserves_input_order_across_concurrent_batches(monkeypatch):
+    records = [search_record(f"r{index}") for index in range(4)]
+
+    async def handle(request):
+        body = json.loads(request.content)
+        item = body["state"]["results"][0]
+        if item["title"] == "r0":
+            await asyncio.sleep(0.05)
+        return httpx.Response(200, json={"answers": {"s0": answer(0.1)}})
+
+    install_transport(monkeypatch, handle)
+    checker = RelevanceChecker(
+        config(search_enabled=True, search_threshold=0.5, search_batch_size=1)
+    )
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result.kept == records
+    assert result.pending == []
+
+
+@pytest.mark.asyncio
+async def test_search_reports_status_and_counts_for_partial_batches(monkeypatch):
+    records = [
+        search_record("r0"),
+        search_record("r1"),
+        search_record("r2"),
+        search_record("r3"),
+        search_record("query-plan"),
+    ]
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        titles = [item["title"] for item in body["state"]["results"]]
+        if "r2" in titles or "query-plan" in titles:
+            return httpx.Response(500)
+        return httpx.Response(
+            200, json={"answers": {"s0": answer(0.1), "s1": answer(0.9)}}
+        )
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(
+        config(search_enabled=True, search_threshold=0.5, search_batch_size=2)
+    )
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result.kept == [records[0], records[4]]
+    assert result.pending == [records[2], records[3]]
+    # Three initial batches plus one retry each for the two failed batches.
+    assert len(requests) == 5
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert len(events) == 5
+    assert [item["chunk.decision"] for item in events] == [
+        "kept",
+        "off_target",
+        "pending",
+        "pending",
+        "title_protected",
+    ]
+    assert [item.get("chunk.pending_reason") for item in events] == [
+        None,
+        None,
+        "error",
+        "error",
+        None,
+    ]
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes == {
+        "relevance.status": "partial",
+        "relevance.input_count": 5,
+        "relevance.chunk_count": 5,
+        "relevance.kept_count": 2,
+        "relevance.pending_count": 2,
+        "relevance.off_target_count": 1,
+        "relevance.threshold": 0.5,
+        "relevance.succeeded_batches": 1,
+        "relevance.failed_batches": 2,
+        "relevance.skipped_batches": 0,
+        "relevance.retried_batches": 2,
+        "relevance.batch_concurrency": SEARCH_BATCH_CONCURRENCY,
+    }
 
 
 @pytest.mark.asyncio
@@ -845,12 +1100,13 @@ async def test_search_caps_chunk_events_and_reports_omissions(monkeypatch):
     finally:
         await checker.aclose()
 
-    assert result == records
+    assert result.kept == records
+    assert result.pending == []
     calls = span.add_event.call_args_list
     assert len(calls) == 128
     assert [call.args[0] for call in calls[:127]] == ["relevance.chunk"] * 127
     assert calls[126].args[1]["chunk.index"] == 126
-    assert calls[126].args[1]["chunk.batch_index"] == 12
+    assert calls[126].args[1]["chunk.batch_index"] == 7
     assert calls[127].args[0] == "relevance.chunks_truncated"
     assert calls[127].args[1] == {"relevance.omitted_count": 73}
 
@@ -873,7 +1129,8 @@ async def test_search_skips_chunk_events_when_not_recording(monkeypatch):
     finally:
         await checker.aclose()
 
-    assert result == [records[0]]
+    assert result.kept == [records[0]]
+    assert result.pending == []
     span.add_event.assert_not_called()
 
 
@@ -888,18 +1145,28 @@ async def test_search_honors_a_caller_deadline_instead_of_resetting_the_budget(
         return httpx.Response(200, json={"answers": {"s0": answer(0.1)}})
 
     install_transport(monkeypatch, handle)
-    install_span(monkeypatch)
-    records = [search_record("one")]
+    span = install_span(monkeypatch)
+    plain_record = search_record("one")
+    protected_record = search_record("two", title="query-plan")
     checker = RelevanceChecker(config(search_timeout_sec=10))
     try:
-        kept = await checker.filter_search_results(
-            "query", records, deadline=time.monotonic() - 1
+        result = await checker.filter_search_results(
+            "query",
+            [plain_record, protected_record],
+            deadline=time.monotonic() - 1,
         )
     finally:
         await checker.aclose()
 
-    assert kept == records
+    assert result.kept == [protected_record]
+    assert result.pending == [plain_record]
     assert requests == []
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert [item["chunk.decision"] for item in events] == [
+        "pending",
+        "title_protected",
+    ]
+    assert events[0]["chunk.pending_reason"] == "deadline"
 
 
 @pytest.mark.asyncio
@@ -916,11 +1183,12 @@ async def test_search_offsets_chunk_indices_across_pages(monkeypatch):
     records = [search_record("one"), search_record("two")]
     checker = RelevanceChecker(config(search_batch_size=1))
     try:
-        kept = await checker.filter_search_results("query", records, index_offset=5)
+        result = await checker.filter_search_results("query", records, index_offset=5)
     finally:
         await checker.aclose()
 
-    assert kept == records
+    assert result.kept == records
+    assert result.pending == []
     chunk_events = [
         call.args[1]
         for call in span.add_event.call_args_list
