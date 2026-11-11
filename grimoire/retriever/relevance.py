@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import time
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypeVar
@@ -100,11 +99,10 @@ class DecisionResponse(BaseModel):
 
 
 def _normalize_title(value: str) -> str:
+    # Keep punctuation: dropping it would turn "1.5" into "15" and protect
+    # unrelated titles such as "15个提升效率的技巧".
     return "".join(
-        character
-        for character in value.casefold()
-        if not character.isspace()
-        and not unicodedata.category(character).startswith("P")
+        character for character in value.casefold() if not character.isspace()
     )
 
 
@@ -471,6 +469,8 @@ class RelevanceChecker:
         batch_status = ["deadline"] * len(batches)
         retried_error_batches = 0
         retried_answer_batches = 0
+        followup_failed_batches = 0
+        followup_skipped_batches = 0
         unexpected_batch_errors = 0
 
         def apply_outcome(batch_index: int, outcome: _BatchOutcome) -> None:
@@ -527,8 +527,15 @@ class RelevanceChecker:
                     # The shared budget ended during the follow-up retry.
                     for position in group:
                         statuses[position] = "deadline"
+                    followup_skipped_batches += 1
                     continue
                 if outcome.status != "success":
+                    followup_failed_batches += 1
+                    if not outcome.unexpected_error:
+                        logger.warning(
+                            "Relevance answer-missing follow-up failed for %d items",
+                            len(group),
+                        )
                     continue
                 for local, position in enumerate(group):
                     score = outcome.scores.get(local)
@@ -613,8 +620,8 @@ class RelevanceChecker:
                 )
 
         succeeded_batches = batch_status.count("success")
-        failed_batches = batch_status.count("error")
-        skipped_batches = batch_status.count("deadline")
+        failed_batches = batch_status.count("error") + followup_failed_batches
+        skipped_batches = batch_status.count("deadline") + followup_skipped_batches
         pending_count = len(pending_records)
         if pending_count == 0:
             status = "ok"
