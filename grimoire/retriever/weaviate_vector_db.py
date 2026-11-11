@@ -333,6 +333,7 @@ class WeaviateVectorDB:
         condition: Condition,
         limit: int,
         offset: int = 0,
+        snapshot: bool = False,
     ) -> RetrievalWindow:
         collection = await self._get_shard(namespace_id)
         filters = condition.to_weaviate_filters()
@@ -376,6 +377,7 @@ class WeaviateVectorDB:
             offset=offset,
             limit=limit,
             span=span,
+            snapshot=snapshot,
         )
         diagnostics = config.search_diagnostics if config else SearchDiagnosticsConfig()
         if diagnostics.enabled and span.is_recording():
@@ -631,6 +633,31 @@ class WeaviateVectorDB:
         )
         window = await self._retrieve_window(
             namespace_id, query, condition, limit, offset
+        )
+        return VectorSearchPage(
+            records=[
+                self._index_record_from_flat_doc(c.properties)
+                for c in window.candidates
+            ],
+            has_more=window.has_more,
+        )
+
+    async def search_snapshot(
+        self,
+        query: str,
+        namespace_id: str,
+        user_id: str | None,
+        depth: int,
+        resource_ids: list[str] | None = None,
+    ) -> VectorSearchPage:
+        condition = Condition(
+            namespace_id=namespace_id,
+            user_id=user_id,
+            record_type=IndexRecordType.chunk.value,
+            resource_ids=resource_ids,
+        )
+        window = await self._retrieve_window(
+            namespace_id, query, condition, depth, snapshot=True
         )
         return VectorSearchPage(
             records=[

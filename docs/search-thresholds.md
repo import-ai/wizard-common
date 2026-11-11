@@ -61,3 +61,16 @@ was 6.6754. This is a starting configuration, not multilingual quality validatio
 Evaluate Chinese, English, mixed text, prefixes, short terms and no-match queries
 before tightening defaults. Inspect retained/rejected counts, target recall,
 relevance-filter acceptance and end-to-end latency; do not tune against RRF scores.
+
+## Stable snapshot recall
+
+`search_snapshot` fixes the depth per branch, excludes the extra lookahead object
+from fusion, and returns the entire eligible fused union rather than a page-sized
+slice. All enabled branches must succeed before publishing a snapshot. The
+lookahead sets `recall_truncated`; it is not a promise of complete corpus recall.
+A snapshot contains at most three times the configured branch depth.
+
+The Backend owns resource pagination for the new snapshot path, including legacy
+POST callers through an adapter. Subsequent resource pages do not run this query
+again. Low-level window APIs remain available for existing non-session callers;
+their increasing-depth fusion is not a snapshot or a stable cross-window cursor.
