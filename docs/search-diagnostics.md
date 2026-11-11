@@ -1,6 +1,6 @@
 # Search candidate diagnostics
 
-Search diagnostics are opt-in tracing only. They do not change candidate selection,
+Search diagnostics are enabled by default and provide tracing only. They do not change candidate selection,
 scores, ordering, or result DTOs. They require a recording search span.
 
 ## Configuration
@@ -8,13 +8,13 @@ scores, ordering, or result DTOs. They require a recording search span.
 Both Wizard applications load these settings through the shared VectorConfig:
 
 ```dotenv
-OBW_VECTOR_SEARCH_DIAGNOSTICS_ENABLED=false
+OBW_VECTOR_SEARCH_DIAGNOSTICS_ENABLED=true
 OBW_VECTOR_SEARCH_DIAGNOSTICS_TIMEOUT_SEC=0.2
 OBW_VECTOR_SEARCH_DIAGNOSTICS_MAX_CANDIDATES=100
 ```
 
 Timeout must be greater than zero and at most one second. The candidate cap is
-1–100. Enable diagnostics temporarily in test when inspecting score distributions.
+1–100. Set OBW_VECTOR_SEARCH_DIAGNOSTICS_ENABLED=false to disable diagnostic probes.
 No cluster configuration is changed automatically.
 
 With diagnostics disabled, or without a recording span, no diagnostic queries or

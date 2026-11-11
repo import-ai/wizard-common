@@ -219,7 +219,7 @@ async def test_integration_keeps_ranking_and_embedding_count(enabled, recording)
 
 
 def test_config_bounds_and_named_vector_metric():
-    assert not SearchDiagnosticsConfig().enabled
+    assert SearchDiagnosticsConfig().enabled
     for kwargs in [{"max_candidates": 101}, {"timeout_sec": 0}, {"timeout_sec": 2}]:
         with pytest.raises(ValidationError):
             SearchDiagnosticsConfig(**kwargs)
