@@ -4,6 +4,7 @@ import pytest
 
 from wizard_common.grimoire.agent.loop_guard import (
     GuardAction,
+    GuardDecision,
     GuardReason,
     LoopGuard,
     LoopGuardConfig,
@@ -764,3 +765,166 @@ def test_config_rejects_non_monotonic_thresholds():
         LoopGuardConfig(write_block_occurrence=3, write_stop_occurrence=3)
     with pytest.raises(ValueError):
         LoopGuardConfig(cycle_min_length=5, cycle_max_length=4)
+
+
+def test_successful_write_resets_read_progress():
+    guard = LoopGuard(LoopGuardConfig())
+    args = {"q": "x"}
+    first = decide(guard, "r1", "private_search", args, 1)
+    assert first.action is GuardAction.EXECUTE
+    record(guard, first)
+    second = decide(guard, "r2", "private_search", args, 2)
+    assert second.action is GuardAction.WARN
+    record(guard, second)
+
+    write = decide(guard, "w1", "create_resource", {"name": "a"}, 3)
+    assert write.action is GuardAction.EXECUTE
+    assert record(guard, write, content="created") is False
+
+    third = decide(guard, "r3", "private_search", args, 4)
+    assert third.action is GuardAction.EXECUTE
+    assert third.reason is None
+    assert third.occurrence == 1
+
+
+def test_failed_write_keeps_read_progress():
+    guard = LoopGuard(LoopGuardConfig())
+    args = {"q": "x"}
+    record(guard, decide(guard, "r1", "private_search", args, 1))
+    record(guard, decide(guard, "r2", "private_search", args, 2))
+
+    write = decide(guard, "w1", "create_resource", {"name": "a"}, 3)
+    assert write.action is GuardAction.EXECUTE
+    assert record(guard, write, content="boom", attrs=FAILED) is False
+
+    third = decide(guard, "r3", "private_search", args, 4)
+    assert third.action is GuardAction.BLOCK
+    assert third.reason is GuardReason.DUPLICATE
+    assert third.occurrence == 3
+
+
+def test_successful_write_clears_cycle_history():
+    guard = LoopGuard(LoopGuardConfig())
+    a = {"parent_id": "A"}
+    b = {"parent_id": "B"}
+    record(guard, decide(guard, "a1", "private_search", a, 1))
+    record(guard, decide(guard, "b1", "private_search", b, 2))
+    record(guard, decide(guard, "a2", "private_search", a, 3))
+    record(guard, decide(guard, "b2", "private_search", b, 4))
+
+    write = decide(guard, "w1", "create_resource", {"name": "a"}, 5)
+    record(guard, write, content="created")
+
+    fresh = decide(guard, "a3", "private_search", a, 6)
+    assert fresh.action is GuardAction.EXECUTE
+    assert fresh.reason is None
+    assert fresh.cycle_length is None
+
+
+def test_guard_state_round_trips_through_a_json_checkpoint():
+    guard = LoopGuard(LoopGuardConfig())
+    args = {"q": "x"}
+    record(guard, decide(guard, "r1", "private_search", args, 1))
+    record(guard, decide(guard, "r2", "private_search", args, 2))
+
+    restored = LoopGuard(LoopGuardConfig())
+    restored.load_state(json.loads(json.dumps(guard.to_state())))
+
+    third = decide(restored, "r3", "private_search", args, 10)
+    assert third.action is GuardAction.BLOCK
+    assert third.occurrence == 3
+    assert restored.blocked_count == 1
+
+
+def test_guard_state_does_not_carry_last_round_across_requests():
+    guard = LoopGuard(LoopGuardConfig())
+    record(guard, decide(guard, "r1", "private_search", {"q": "x"}, 0))
+
+    restored = LoopGuard(LoopGuardConfig())
+    restored.load_state(guard.to_state())
+
+    second = decide(restored, "r2", "private_search", {"q": "x"}, 0)
+    assert second.action is GuardAction.WARN
+    assert second.reason is GuardReason.DUPLICATE
+    assert second.occurrence == 2
+
+
+def test_guard_load_state_tolerates_missing_or_malformed_payloads():
+    guard = LoopGuard(LoopGuardConfig())
+    guard.load_state(None)
+    guard.load_state({"version": 999})
+    guard.load_state(
+        {
+            "version": 1,
+            "signatures": [None, {"name": "x"}, {"name": "x", "key": 1}],
+            "history": ["bad"],
+            "stop_info": {"repeat_count": "many", "cycle_length": "two"},
+            "blocked_count": -3,
+        }
+    )
+    decision = decide(guard, "r1", "private_search", {"q": "x"}, 0)
+    assert decision.action is GuardAction.EXECUTE
+    assert guard.blocked_count == 0
+
+
+@pytest.mark.parametrize(
+    ("reason", "chinese", "english"),
+    [
+        (GuardReason.DUPLICATE_IN_ROUND, "同一轮内再次出现", "in this round"),
+        (GuardReason.CYCLE, "检测到 2 个工具调用的循环", "cycle of 2 tool calls"),
+        (GuardReason.WRITE_REPEAT, "写操作已经执行过", "same write call already ran"),
+        (GuardReason.FAILED_REPEAT, "上一次调用已失败", "previous call"),
+        (GuardReason.ROUND_LIMIT, "工具调用次数已达到上限", "round limit"),
+        (GuardReason.DUPLICATE, "相同参数已执行 3 次", "already ran 3 time(s)"),
+    ],
+)
+def test_user_templates_render_each_reason_in_both_languages(reason, chinese, english):
+    decision = GuardDecision(
+        tool_call_id="x",
+        tool_name="list_resources",
+        action=GuardAction.BLOCK,
+        reason=reason,
+        occurrence=4,
+        repeat_count=2,
+        cycle_length=2,
+    )
+    zh = render_guard_user_text(decision, "简体中文")
+    en = render_guard_user_text(decision, "English")
+    assert chinese in zh
+    assert english in en
+    assert "{{" not in zh and "{%" not in zh
+    assert "{{" not in en and "{%" not in en
+
+
+def test_model_and_warn_templates_render_in_both_languages():
+    block = GuardDecision(
+        tool_call_id="x",
+        tool_name="list_resources",
+        action=GuardAction.BLOCK,
+        reason=GuardReason.WRITE_REPEAT,
+        occurrence=2,
+        repeat_count=0,
+    )
+    stop = GuardDecision(
+        tool_call_id="y",
+        tool_name="list_resources",
+        action=GuardAction.STOP,
+        reason=GuardReason.DUPLICATE,
+        occurrence=4,
+        repeat_count=2,
+    )
+    warn = GuardDecision(
+        tool_call_id="z",
+        tool_name="web_search",
+        action=GuardAction.WARN,
+        reason=GuardReason.DUPLICATE,
+        occurrence=2,
+        repeat_count=0,
+    )
+    note = render_guard_model_note(block)
+    assert "The call to `list_resources` was NOT executed" in note
+    assert "same write call" not in note
+    assert "A write call with these arguments already ran" in note
+    assert "Tool use is disabled" in render_guard_model_note(stop)
+    assert "Note: this is repeat 1" in render_guard_warn_note(warn)
+    assert "暂无" not in render_guard_user_text(stop, "English")
