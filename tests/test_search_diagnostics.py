@@ -1,5 +1,4 @@
 import asyncio
-import time
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -134,13 +133,21 @@ async def test_probes_run_concurrently_and_timeout_without_discarding_other_leg(
 
 
 @pytest.mark.asyncio
-async def test_expired_request_budget_starts_no_queries():
+async def test_both_probes_receive_the_independent_five_second_budget():
     args, collection, span = setup_probe()
-    args["deadline"] = time.monotonic() - 1
-    await record_candidates(**args)
-    collection.query.near_vector.assert_not_called()
-    collection.query.bm25.assert_not_called()
-    assert span.add_event.call_args.args[1]["candidate.vector_status"] == "deadline"
+    original_timeout = asyncio.timeout
+    budgets = []
+
+    def capture_timeout(delay):
+        budgets.append(delay)
+        return original_timeout(delay)
+
+    with patch.object(asyncio, "timeout", side_effect=capture_timeout):
+        await record_candidates(**args)
+    assert budgets == [5.0, 5.0]
+    collection.query.near_vector.assert_awaited_once()
+    collection.query.bm25.assert_awaited_once()
+    assert attributes(span)["search.diagnostics.status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -220,7 +227,7 @@ async def test_integration_keeps_ranking_and_embedding_count(enabled, recording)
 
 def test_config_bounds_and_named_vector_metric():
     assert SearchDiagnosticsConfig().enabled
-    for kwargs in [{"max_candidates": 101}, {"timeout_sec": 0}, {"timeout_sec": 2}]:
+    for kwargs in [{"max_candidates": 101}, {"timeout_sec": 0}, {"timeout_sec": 6}]:
         with pytest.raises(ValidationError):
             SearchDiagnosticsConfig(**kwargs)
     config = SimpleNamespace(

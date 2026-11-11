@@ -16,7 +16,7 @@ class WeaviateConfig(BaseModel):
 
 class SearchDiagnosticsConfig(BaseModel):
     enabled: bool = True
-    timeout_sec: float = Field(default=0.2, gt=0, le=1)
+    timeout_sec: float = Field(default=5.0, gt=0, le=5)
     max_candidates: int = Field(default=100, ge=1, le=100)
 
 

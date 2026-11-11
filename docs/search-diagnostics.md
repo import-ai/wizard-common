@@ -9,11 +9,11 @@ Both Wizard applications load these settings through the shared VectorConfig:
 
 ```dotenv
 OBW_VECTOR_SEARCH_DIAGNOSTICS_ENABLED=true
-OBW_VECTOR_SEARCH_DIAGNOSTICS_TIMEOUT_SEC=0.2
+OBW_VECTOR_SEARCH_DIAGNOSTICS_TIMEOUT_SEC=5
 OBW_VECTOR_SEARCH_DIAGNOSTICS_MAX_CANDIDATES=100
 ```
 
-Timeout must be greater than zero and at most one second. The candidate cap is
+Timeout must be greater than zero and at most five seconds. The candidate cap is
 1–100. Set OBW_VECTOR_SEARCH_DIAGNOSTICS_ENABLED=false to disable diagnostic probes.
 No cluster configuration is changed automatically.
 
@@ -28,12 +28,14 @@ queries: near_vector with distance metadata and BM25 over the original WORD fiel
 Both retain the original filters and namespace tenant. GSE scores are reused from
 the existing GSE response, with no additional GSE query.
 
-The probe timeout is also bounded by the remaining caller deadline when supplied
-by the Wizard search paginator. Exhausted budgets start no queries; cancellations
-propagate and cancel both probes. Probe failures never replace search results.
-Enabling diagnostics can consume search budget and reduce how much later work
-fits in that budget; do not compare its end-to-end latency with normal searches
-without separating search.diagnostics.duration_ms.
+The two probes share an independent five-second phase by running concurrently,
+with each query bounded by the configured timeout. The relevance-filter deadline
+is not applied to diagnostics: slow retrieval must not consume its probe budget.
+Upstream cancellation still propagates and cancels both probes. Probe failures
+never replace search results. This does not extend Backend's overall HTTP timeout;
+if the caller cancels, diagnostic collection may still be incomplete.
+Enabling diagnostics can consume end-to-end search time; separate
+search.diagnostics.duration_ms when evaluating normal search performance.
 
 The original BM25 score is measured in a candidate-filtered query using the same
 query text and WORD properties, not extracted from hybrid explain_score. It is
@@ -60,7 +62,7 @@ are labeled unknown, never assumed to be cosine. No extra schema query is added.
 Never interpret hybrid/final scores as probabilities or raw vector similarities.
 
 Statuses distinguish ok, missing metadata, not_matched (successful WORD probe only),
-not_in_recall (GSE top-K absence), disabled, error, timeout, and deadline.
+not_in_recall (GSE top-K absence), disabled, error, and timeout.
 Unavailable numeric attributes are omitted, not replaced by zero or null.
 GSE absence from top-K does not prove that the text has no matching Chinese terms.
 

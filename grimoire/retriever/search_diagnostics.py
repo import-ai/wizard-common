@@ -41,7 +41,6 @@ async def record_candidates(
     gse_failed: bool,
     metric: str,
     offset: int,
-    deadline: float | None = None,
 ) -> None:
     started = time.monotonic()
     candidates = selected[: config.max_candidates]
@@ -57,8 +56,6 @@ async def record_candidates(
         span.set_attribute("search.diagnostics.status", "empty")
         return
     budget = config.timeout_sec
-    if deadline is not None:
-        budget = min(budget, deadline - started)
     candidate_filter = wvc.query.Filter.by_id().contains_any(
         [uuid for uuid, _ in candidates]
     )
@@ -66,8 +63,6 @@ async def record_candidates(
         candidate_filter = filters & candidate_filter
 
     async def probe(kind: str) -> tuple[str, dict[str, float], set[str]]:
-        if budget <= 0:
-            return "deadline", {}, set()
         try:
             async with asyncio.timeout(budget):
                 if kind == "vector":

@@ -333,7 +333,6 @@ class WeaviateVectorDB:
         condition: Condition,
         limit: int,
         offset: int = 0,
-        diagnostics_deadline: float | None = None,
     ) -> List[Tuple[dict, float]]:
         collection = await self._get_shard(namespace_id)
         search_limit = limit + offset
@@ -485,7 +484,6 @@ class WeaviateVectorDB:
                     gse_failed=gse_error is not None,
                     metric=self._distance_metric,
                     offset=offset,
-                    deadline=diagnostics_deadline,
                 )
             except Exception:
                 span.set_attribute("search.diagnostics.status", "error")
@@ -708,7 +706,6 @@ class WeaviateVectorDB:
         conversation_ids: list[str] | None = None,
         exclude_conversation_ids: list[str] | None = None,
         resource_ids: list[str] | None = None,
-        diagnostics_deadline: float | None = None,
     ) -> List[IndexRecord]:
         condition = Condition(
             conversation_ids=conversation_ids,
@@ -725,7 +722,6 @@ class WeaviateVectorDB:
             condition=condition,
             limit=limit,
             offset=offset,
-            diagnostics_deadline=diagnostics_deadline,
         )
         return [self._index_record_from_flat_doc(hit) for hit, _ in hits]
 
