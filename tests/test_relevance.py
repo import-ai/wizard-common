@@ -602,6 +602,11 @@ async def test_search_retries_answer_missing_items_once(monkeypatch):
     events = [call.args[1] for call in span.add_event.call_args_list]
     assert [item["chunk.decision"] for item in events] == ["kept", "kept"]
     assert len({item["chunk.chunk_id"] for item in events}) == 2
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes["relevance.status"] == "ok"
+    assert attributes["relevance.kept_count"] == 2
+    assert attributes["relevance.pending_count"] == 0
+    assert attributes["relevance.retried_batches"] == 1
 
 
 @pytest.mark.asyncio
