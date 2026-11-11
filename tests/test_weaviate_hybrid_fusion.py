@@ -1,29 +1,21 @@
-import math
+import asyncio
 import uuid
 from dataclasses import dataclass
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-import weaviate.classes as wvc
 from weaviate.collections.filters import _FilterToREST
 from weaviate.exceptions import WeaviateQueryError
 
-import wizard_common.grimoire.retriever.weaviate_vector_db as vector_db_module
+from wizard_common.grimoire.config import SearchThresholdsConfig, VectorConfig
 from wizard_common.grimoire.entity.tools import Condition
-from wizard_common.grimoire.retriever.weaviate_vector_db import (
-    ALPHA,
-    GSE_LEG_WEIGHT,
-    GSE_QUERY_PROPERTIES,
-    RRF_K,
-    WORD_QUERY_PROPERTIES,
-    WeaviateVectorDB,
-)
+from wizard_common.grimoire.retriever.search_retrieval import ALPHA, RRF_K
+from wizard_common.grimoire.retriever.weaviate_vector_db import WeaviateVectorDB
 
 
 @dataclass
 class FakeMetadata:
     score: float | None = None
-    certainty: float | None = None
     distance: float | None = None
 
 
@@ -42,308 +34,259 @@ class QueryResponse:
 CONDITION = Condition(namespace_id="space")
 
 
-def make_db(hybrid_objects=(), bm25_objects=(), bm25_error=None):
+def obj(index, *, distance=None, score=None):
+    return FakeObject(
+        uuid.UUID(int=index),
+        {"chunk_title": f"title-{index}"},
+        FakeMetadata(score=score, distance=distance),
+    )
+
+
+def make_db(vector_objects=(), word_objects=(), gse_objects=(), thresholds=None):
     db = object.__new__(WeaviateVectorDB)
+    db.config = VectorConfig(
+        embedding={}, search_thresholds=thresholds or SearchThresholdsConfig()
+    )
+    db._distance_metric = "cosine"
     collection = AsyncMock()
-    collection.query.hybrid.return_value = QueryResponse(list(hybrid_objects))
-    if bm25_error is not None:
-        collection.query.bm25.side_effect = bm25_error
-    else:
-        collection.query.bm25.return_value = QueryResponse(list(bm25_objects))
+
+    async def vector(**kwargs):
+        distance = kwargs.get("distance")
+        objects = [
+            o
+            for o in vector_objects
+            if distance is None
+            or (o.metadata.distance is not None and o.metadata.distance <= distance)
+        ]
+        return QueryResponse(objects[: kwargs["limit"]])
+
+    async def bm25(**kwargs):
+        objects = (
+            gse_objects
+            if kwargs["query_properties"][0].endswith("_gse")
+            else word_objects
+        )
+        return QueryResponse(list(objects)[: kwargs["limit"]])
+
+    collection.query.near_vector.side_effect = vector
+    collection.query.bm25.side_effect = bm25
     db._get_shard = AsyncMock(return_value=collection)
     db._embed = AsyncMock(return_value=[[1.0, 0.0]])
     return db, collection
 
 
-def score_by_title(hits):
-    return {props["chunk_title"]: score for props, score in hits}
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["NEBULA610X", "2024", "!!!"])
+async def test_ascii_query_runs_two_native_legs_once_without_diagnostic_probes(query):
+    target = obj(1, distance=0.4)
+    db, collection = make_db(vector_objects=[target])
+    window = await db._retrieve_window("space", query, CONDITION, limit=20)
+    assert [c.uuid for c in window.candidates] == [str(target.uuid)]
+    collection.query.hybrid.assert_not_called()
+    collection.query.near_vector.assert_awaited_once()
+    collection.query.bm25.assert_awaited_once()
+    db._embed.assert_awaited_once_with(query)
+    assert collection.query.near_vector.call_args.kwargs["distance"] == 0.5
+    assert collection.query.near_vector.call_args.kwargs["limit"] == 21
 
 
 @pytest.mark.asyncio
-async def test_ascii_query_only_runs_word_hybrid_leg():
-    obj = FakeObject(uuid.uuid4(), {"chunk_title": "NEBULA610X"}, FakeMetadata(0.02))
-    db, collection = make_db(hybrid_objects=[obj])
-
-    hits = await db._hybrid_query("space", "NEBULA610X", CONDITION, limit=20)
-
-    collection.query.bm25.assert_not_called()
-    arguments = collection.query.hybrid.call_args.kwargs
-    assert arguments["query"] == "NEBULA610X"
-    assert arguments["query_properties"] == WORD_QUERY_PROPERTIES
-    assert all("_gse" not in prop for prop in arguments["query_properties"])
-    assert arguments["alpha"] == ALPHA
-    assert arguments["fusion_type"] == wvc.query.HybridFusion.RANKED
-    assert arguments["limit"] == 20
-    assert hits == [(obj.properties, 0.02)]
+@pytest.mark.parametrize("query", ["标题编码", "NEBULA610X 标题编码"])
+async def test_cjk_leg_receives_only_cjk_and_has_independent_threshold(query):
+    db, collection = make_db(gse_objects=[obj(1, score=0.1)])
+    window = await db._retrieve_window("space", query, CONDITION, limit=20)
+    calls = collection.query.bm25.call_args_list
+    assert calls[0].kwargs["query"] == query
+    assert calls[1].kwargs["query"] == "标题编码"
+    assert window.candidates[0].passed_legs == ["gse"]
+    assert window.candidates[0].gse_bm25_score == 0.1
 
 
 @pytest.mark.asyncio
-async def test_cjk_query_runs_gse_bm25_leg():
-    obj = FakeObject(uuid.uuid4(), {"chunk_title": "标题编码"}, FakeMetadata(0.03))
-    db, collection = make_db(bm25_objects=[obj])
-
-    hits = await db._hybrid_query("space", "标题编码", CONDITION, limit=5)
-
-    arguments = collection.query.bm25.call_args.kwargs
-    assert arguments["query"] == "标题编码"
-    assert arguments["query_properties"] == GSE_QUERY_PROPERTIES
-    assert arguments["limit"] == 5
-    assert arguments["return_metadata"].score is True
-    assert collection.query.hybrid.call_args.kwargs["query"] == "标题编码"
-    assert hits == [(obj.properties, GSE_LEG_WEIGHT / RRF_K)]
-
-
-@pytest.mark.asyncio
-async def test_mixed_query_splits_channels():
-    target = FakeObject(uuid.uuid4(), {"chunk_title": "610-11 NEBULA610X-标题编码.md"})
-    db, collection = make_db(hybrid_objects=[target], bm25_objects=[target])
-
-    await db._hybrid_query("space", "NEBULA610X 标题编码", CONDITION, limit=3)
-
-    assert collection.query.hybrid.call_args.kwargs["query"] == "NEBULA610X 标题编码"
-    assert collection.query.bm25.call_args.kwargs["query"] == "标题编码"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("query", ["!!!", "NEBULA610X", "2024"])
-async def test_stripped_empty_query_skips_gse_leg(query):
-    db, collection = make_db()
-
-    await db._hybrid_query("space", query, CONDITION, limit=3)
-
-    collection.query.bm25.assert_not_called()
-    assert collection.query.hybrid.call_args.kwargs["query"] == query
-
-
-@pytest.mark.asyncio
-async def test_fusion_adds_scores_for_same_uuid():
-    shared = uuid.uuid4()
-    other = uuid.uuid4()
-    db, collection = make_db(
-        hybrid_objects=[
-            FakeObject(shared, {"chunk_title": "shared"}, FakeMetadata(0.01)),
-            FakeObject(other, {"chunk_title": "other"}, FakeMetadata(0.02)),
-        ],
-        bm25_objects=[
-            FakeObject(shared, {"chunk_title": "shared"}, FakeMetadata(9.0)),
-            FakeObject(other, {"chunk_title": "other"}, FakeMetadata(1.0)),
-        ],
+async def test_union_includes_vector_only_keyword_only_and_cjk_only():
+    db, _ = make_db(
+        vector_objects=[obj(1, distance=0.5)],
+        word_objects=[obj(2, score=1)],
+        gse_objects=[obj(3, score=0.1)],
     )
-
-    hits = await db._hybrid_query("space", "标题", CONDITION, limit=10)
-
-    scores = score_by_title(hits)
-    assert math.isclose(scores["shared"], 0.01 + GSE_LEG_WEIGHT / RRF_K)
-    assert math.isclose(scores["other"], 0.02 + GSE_LEG_WEIGHT / (RRF_K + 1))
-    assert [props["chunk_title"] for props, _ in hits] == ["other", "shared"]
-
-
-@pytest.mark.asyncio
-async def test_fusion_orders_by_score_then_uuid_string():
-    first = uuid.UUID(int=1)
-    second = uuid.UUID(int=2)
-    db, collection = make_db(
-        hybrid_objects=[
-            FakeObject(second, {"chunk_title": "second"}, FakeMetadata(0.02)),
-            FakeObject(first, {"chunk_title": "first"}, FakeMetadata(0.02)),
-        ]
-    )
-
-    hits = await db._hybrid_query("space", "NEBULA610X", CONDITION, limit=10)
-
-    assert [props["chunk_title"] for props, _ in hits] == ["first", "second"]
+    window = await db._retrieve_window("space", "query 中文", CONDITION, limit=20)
+    assert {c.uuid: c.passed_legs for c in window.candidates} == {
+        str(uuid.UUID(int=1)): ["vector"],
+        str(uuid.UUID(int=2)): ["word"],
+        str(uuid.UUID(int=3)): ["gse"],
+    }
 
 
 @pytest.mark.asyncio
-async def test_digit_noise_cannot_outrank_exact_title():
-    target = FakeObject(
-        uuid.UUID(int=1),
-        {"chunk_title": "610-11 NEBULA610X-标题编码.md", "chunk_title_gse": "标题编码"},
-        FakeMetadata(GSE_LEG_WEIGHT / RRF_K),
+async def test_threshold_edges_and_failed_branch_do_not_contribute():
+    db, _ = make_db(
+        vector_objects=[obj(1, distance=0.5), obj(2, distance=0.50001)],
+        word_objects=[obj(3, score=1.0), obj(4, score=0.99999)],
     )
-    noise = FakeObject(
-        uuid.UUID(int=2),
-        {"chunk_title": "杭州10个区", "chunk_title_gse": "杭州 10 5 8 6334"},
-        None,
-    )
-    db, collection = make_db(
-        hybrid_objects=[target, noise],
-        bm25_objects=[
-            # Raw BM25 magnitude is large but the GSE leg only contributes by rank.
-            FakeObject(noise.uuid, noise.properties, FakeMetadata(50.0)),
-            FakeObject(target.uuid, target.properties, FakeMetadata(0.1)),
-        ],
-    )
-
-    hits = await db._hybrid_query("space", "NEBULA610X 标题编码", CONDITION, limit=3)
-
-    assert hits[0][0]["chunk_title"] == "610-11 NEBULA610X-标题编码.md"
-    assert hits[1][0]["chunk_title"] == "杭州10个区"
+    window = await db._retrieve_window("space", "query", CONDITION, limit=20)
+    assert {c.uuid for c in window.candidates} == {
+        str(uuid.UUID(int=1)),
+        str(uuid.UUID(int=3)),
+    }
+    assert all(c.final_score == ALPHA / RRF_K for c in window.candidates)
 
 
 @pytest.mark.asyncio
-async def test_gse_leg_failure_falls_back_to_hybrid_results(caplog):
-    obj = FakeObject(uuid.uuid4(), {"chunk_title": "目标"}, FakeMetadata(0.04))
-    db, collection = make_db(
-        hybrid_objects=[obj],
-        bm25_error=WeaviateQueryError("bm25 exploded", "grpc"),
-    )
-    fake_span = MagicMock()
-
-    with patch.object(vector_db_module, "trace") as fake_trace:
-        fake_trace.get_current_span.return_value = fake_span
-        hits = await db._hybrid_query("space", "标题", CONDITION, limit=5)
-
-    assert hits == [(obj.properties, 0.04)]
-    attributes = {}
-    for call in fake_span.set_attributes.call_args_list:
-        attributes.update(call.args[0])
-    for call in fake_span.set_attribute.call_args_list:
-        attributes[call.args[0]] = call.args[1]
-    assert "bm25 exploded" in attributes["weaviate.hybrid.gse_error"]
-    assert attributes["weaviate.hybrid.gse_leg"] is True
-    assert attributes["weaviate.hybrid.gse_object_count"] == 0
-    assert attributes["weaviate.hybrid.fused_object_count"] == 1
-    assert "bm25 exploded" in caplog.text
+async def test_same_uuid_fuses_only_qualifying_legs_and_preserves_raw_low_score():
+    vector = obj(1, distance=0.4)
+    word = obj(1, score=0.2)
+    db, _ = make_db(vector_objects=[vector], word_objects=[word])
+    window = await db._retrieve_window("space", "query", CONDITION, limit=20)
+    c = window.candidates[0]
+    assert c.passed_legs == ["vector"]
+    assert c.returned_legs == ["vector", "word"]
+    assert c.word_bm25_score == 0.2
+    assert c.final_score == ALPHA / RRF_K
 
 
 @pytest.mark.asyncio
-async def test_tenant_not_found_from_both_legs_returns_empty():
-    tenant_error = WeaviateQueryError("tenant not found", "grpc")
-    db, collection = make_db(bm25_error=tenant_error)
-    collection.query.hybrid.side_effect = tenant_error
-
-    assert await db._hybrid_query("space", "标题编码", CONDITION, limit=5) == []
+async def test_matching_two_legs_outranks_one_and_ties_use_uuid():
+    db, _ = make_db(
+        vector_objects=[obj(3, distance=0.3), obj(2, distance=0.3)],
+        word_objects=[obj(1, score=6), obj(2, score=6)],
+    )
+    window = await db._retrieve_window("space", "query", CONDITION, limit=20)
+    assert [c.uuid for c in window.candidates] == [
+        str(uuid.UUID(int=i)) for i in [2, 1, 3]
+    ]
 
 
 @pytest.mark.asyncio
-async def test_tenant_not_found_from_hybrid_leg_returns_empty():
-    tenant_error = WeaviateQueryError("tenant not found", "grpc")
-    db, collection = make_db()
-    collection.query.hybrid.side_effect = tenant_error
-
-    assert await db._hybrid_query("space", "NEBULA610X", CONDITION, limit=5) == []
+async def test_disabling_thresholds_and_custom_gse_minimum():
+    thresholds = SearchThresholdsConfig(
+        max_distance=None, word_min_bm25_score=None, gse_min_bm25_score=2
+    )
+    db, _ = make_db(
+        vector_objects=[obj(1, distance=0.9)],
+        word_objects=[obj(2, score=0.01)],
+        gse_objects=[obj(3, score=1)],
+        thresholds=thresholds,
+    )
+    window = await db._retrieve_window("space", "query 中文", CONDITION, limit=20)
+    assert {c.uuid for c in window.candidates} == {
+        str(uuid.UUID(int=i)) for i in [1, 2]
+    }
 
 
 @pytest.mark.asyncio
-async def test_message_path_uses_split_message_properties():
-    db, collection = make_db()
-
-    await db._hybrid_query("space", "标题编码", CONDITION, limit=3)
-
-    assert (
-        "message_content"
-        in collection.query.hybrid.call_args.kwargs["query_properties"]
-    )
-    assert (
-        "message_content_gse"
-        in collection.query.bm25.call_args.kwargs["query_properties"]
-    )
-    assert (
-        "message_content"
-        not in collection.query.bm25.call_args.kwargs["query_properties"]
-    )
-    assert (
-        "message_content_gse"
-        not in collection.query.hybrid.call_args.kwargs["query_properties"]
-    )
+async def test_weak_keyword_tail_exhausts_branch_without_fabricating_more():
+    objects = [obj(1, score=6)] + [obj(i, score=0.2) for i in range(2, 150)]
+    db, _ = make_db(word_objects=objects)
+    window = await db._retrieve_window("space", "query", CONDITION, limit=100)
+    assert len(window.candidates) == 1
+    assert not window.has_more
 
 
 @pytest.mark.asyncio
-async def test_offset_slices_fused_ranking_after_fusion():
-    gse_bonus = GSE_LEG_WEIGHT / RRF_K
-    ids = [uuid.UUID(int=index) for index in range(1, 7)]
-    db, collection = make_db(
-        hybrid_objects=[
-            FakeObject(ids[0], {"chunk_title": "h0"}, FakeMetadata(5 * gse_bonus)),
-            FakeObject(ids[1], {"chunk_title": "h1"}, FakeMetadata(4 * gse_bonus)),
-            FakeObject(ids[2], {"chunk_title": "hb"}, FakeMetadata(2.5 * gse_bonus)),
-            FakeObject(ids[3], {"chunk_title": "ha"}, FakeMetadata(2 * gse_bonus)),
-            FakeObject(ids[4], {"chunk_title": "h4"}, FakeMetadata(1.5 * gse_bonus)),
-            FakeObject(ids[5], {"chunk_title": "h5"}, FakeMetadata(1 * gse_bonus)),
-        ],
-        bm25_objects=[
-            FakeObject(ids[3], {"chunk_title": "ha"}, FakeMetadata(9.0)),
-        ],
-    )
-
-    hits = await db._hybrid_query("space", "标题", CONDITION, limit=4, offset=2)
-
-    assert collection.query.hybrid.call_args.kwargs["limit"] == 6
-    assert collection.query.bm25.call_args.kwargs["limit"] == 6
-    # The rank-0 GSE bonus lifts ha above hb; the slice is taken after fusion.
-    assert [props["chunk_title"] for props, _ in hits] == ["ha", "hb", "h4", "h5"]
-
-
-def filter_leaves(node):
-    return (
-        [leaf for child in node["operands"] for leaf in filter_leaves(child)]
-        if "operands" in node
-        else [node]
-    )
+async def test_lookahead_and_last_page_are_explicit():
+    db, collection = make_db(vector_objects=[obj(i, distance=0.4) for i in range(1, 4)])
+    first = await db._retrieve_window("space", "query", CONDITION, limit=2)
+    second = await db._retrieve_window("space", "query", CONDITION, limit=2, offset=2)
+    assert len(first.candidates) == 2 and first.has_more
+    assert len(second.candidates) == 1 and not second.has_more
+    assert collection.query.near_vector.call_args.kwargs["limit"] == 5
 
 
 @pytest.mark.asyncio
-async def test_both_legs_receive_the_same_filters():
+async def test_all_legs_receive_identical_scope_filters():
     db, collection = make_db()
     condition = Condition(
-        namespace_id="space", user_id="user", resource_ids=["r1", "r2"]
+        namespace_id="space",
+        user_id="user",
+        resource_ids=["r1"],
+        conversation_ids=["current"],
+        exclude_conversation_ids=["old"],
     )
+    await db._retrieve_window("space", "query 中文", condition, limit=3)
     expected = _FilterToREST.convert(condition.to_weaviate_filters())
-
-    await db._hybrid_query("space", "标题编码", condition, limit=3)
-
-    hybrid_filters = collection.query.hybrid.call_args.kwargs["filters"]
-    bm25_filters = collection.query.bm25.call_args.kwargs["filters"]
-    assert hybrid_filters is bm25_filters
-    for filters in (hybrid_filters, bm25_filters):
-        wire = _FilterToREST.convert(filters)
-        assert wire == expected
-        leaves = filter_leaves(wire)
-        assert {
-            "operator": "Equal",
-            "path": ["namespace_id"],
-            "valueText": "space",
-        } in leaves
-        assert {
-            "operator": "Equal",
-            "path": ["user_id"],
-            "valueText": "user",
-        } in leaves
-        assert {
-            "operator": "ContainsAny",
-            "path": ["chunk_resource_id"],
-            "valueTextArray": ["r1", "r2"],
-        } in leaves
+    for call in [
+        collection.query.near_vector.call_args,
+        *collection.query.bm25.call_args_list,
+    ]:
+        assert _FilterToREST.convert(call.kwargs["filters"]) == expected
 
 
 @pytest.mark.asyncio
-async def test_non_tenant_hybrid_failure_reraises():
-    noise = FakeObject(uuid.uuid4(), {"chunk_title": "噪声"}, FakeMetadata(1.0))
-    db, collection = make_db(bm25_objects=[noise])
-    collection.query.hybrid.side_effect = WeaviateQueryError("hybrid exploded", "grpc")
-
-    with pytest.raises(WeaviateQueryError, match="hybrid exploded"):
-        await db._hybrid_query("space", "标题", CONDITION, limit=5)
-
-
-@pytest.mark.asyncio
-async def test_embedding_failure_reraises_even_when_gse_succeeds():
-    noise = FakeObject(uuid.uuid4(), {"chunk_title": "噪声"}, FakeMetadata(1.0))
-    db, collection = make_db(bm25_objects=[noise])
-    db._embed = AsyncMock(side_effect=RuntimeError("embedding exploded"))
-
-    with pytest.raises(RuntimeError, match="embedding exploded"):
-        await db._hybrid_query("space", "标题", CONDITION, limit=5)
-
-    collection.query.bm25.assert_awaited()
-    collection.query.hybrid.assert_not_awaited()
+async def test_one_failed_leg_cannot_qualify_but_other_leg_survives():
+    db, collection = make_db(word_objects=[obj(1, score=2)])
+    db._embed.side_effect = RuntimeError("embedding failed")
+    window = await db._retrieve_window("space", "query", CONDITION, limit=3)
+    assert window.candidates[0].passed_legs == ["word"]
+    assert window.branch_status == {"gse": "disabled", "vector": "error", "word": "ok"}
+    collection.query.near_vector.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_embedding_tenant_not_found_returns_empty():
+async def test_all_failed_legs_raise_and_missing_tenant_is_empty():
     db, collection = make_db()
-    db._embed = AsyncMock(side_effect=WeaviateQueryError("tenant not found", "grpc"))
+    db._embed.side_effect = RuntimeError("embedding failed")
+    collection.query.bm25.side_effect = RuntimeError("word failed")
+    with pytest.raises(RuntimeError, match="embedding failed"):
+        await db._retrieve_window("space", "query", CONDITION, limit=3)
+    error = WeaviateQueryError("tenant not found", "grpc")
+    db._embed.side_effect = error
+    collection.query.bm25.side_effect = error
+    assert (
+        await db._retrieve_window("space", "query", CONDITION, limit=3)
+    ).candidates == []
 
-    assert await db._hybrid_query("space", "标题", CONDITION, limit=5) == []
-    collection.query.hybrid.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_cancellation_stops_all_legs():
+    db, collection = make_db()
+    entered = 0
+    started = asyncio.Event()
+    finished = []
+
+    async def wait(*args, **kwargs):
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            finished.append(True)
+
+    db._embed.side_effect = wait
+    collection.query.bm25.side_effect = wait
+    task = asyncio.create_task(db._retrieve_window("space", "query", CONDITION, 3))
+    await asyncio.wait_for(started.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(finished) == 2
+
+
+@pytest.mark.asyncio
+async def test_keyword_and_embedding_run_concurrently():
+    db, collection = make_db()
+    ready = asyncio.Event()
+
+    async def embedding(query):
+        await ready.wait()
+        return [[1.0]]
+
+    async def bm25(**kwargs):
+        ready.set()
+        return QueryResponse([])
+
+    db._embed.side_effect = embedding
+    collection.query.bm25.side_effect = bm25
+    await asyncio.wait_for(db._retrieve_window("space", "query", CONDITION, 3), 1)
+
+
+@pytest.mark.asyncio
+async def test_empty_query_uses_fetch_without_embedding_or_keyword_queries():
+    db, collection = make_db()
+    collection.query.fetch_objects.return_value = QueryResponse([obj(1)])
+    hits = await db._hybrid_query("space", "", CONDITION, 3)
+    assert hits == [({"chunk_title": "title-1"}, 0.0)]
+    db._embed.assert_not_called()
+    collection.query.near_vector.assert_not_called()
+    collection.query.bm25.assert_not_called()

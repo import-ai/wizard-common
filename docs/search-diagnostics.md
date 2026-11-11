@@ -1,77 +1,40 @@
 # Search candidate diagnostics
 
-Search diagnostics are enabled by default and provide tracing only. They do not change candidate selection,
-scores, ordering, or result DTOs. They require a recording search span.
-
-## Configuration
-
-Both Wizard applications load these settings through the shared VectorConfig:
+Diagnostics are enabled by default. They only format metadata from formal retrieval;
+they add no queries, embeddings, or result fields. A recording span is required.
 
 ```dotenv
 OBW_VECTOR_SEARCH_DIAGNOSTICS_ENABLED=true
-OBW_VECTOR_SEARCH_DIAGNOSTICS_TIMEOUT_SEC=5
 OBW_VECTOR_SEARCH_DIAGNOSTICS_MAX_CANDIDATES=100
 ```
 
-Timeout must be greater than zero and at most five seconds. The candidate cap is
-1–100. Set OBW_VECTOR_SEARCH_DIAGNOSTICS_ENABLED=false to disable diagnostic probes.
-No cluster configuration is changed automatically.
+The previous diagnostic timeout setting is obsolete: there are no diagnostic RPCs
+and no separate five-second diagnostic phase. Existing request deadlines still apply.
+Disabling diagnostics does not disable retrieval thresholds.
 
-With diagnostics disabled, or without a recording span, no diagnostic queries or
-embedding calls are added. Empty-query fetches are not probed.
+## Measurements and events
 
-## Measurements
+The existing `WeaviateVectorDB._hybrid_query` span name is retained for continuity,
+but retrieval now uses independent vector, WORD and optional GSE branches. See
+[Search thresholds](search-thresholds.md).
 
-For the current post-fusion offset/limit slice, the helper probes at most 100 UUIDs.
-It reuses the existing query embedding and issues two concurrent, candidate-scoped
-queries: near_vector with distance metadata and BM25 over the original WORD fields.
-Both retain the original filters and namespace tenant. GSE scores are reused from
-the existing GSE response, with no additional GSE query.
+Each `search.candidate` event records UUID, post-fusion rank, chunk/resource or
+message join IDs, `candidate.passed_legs`, raw vector distance, raw WORD/GSE BM25
+scores, `candidate.final_score` and `candidate.word_vector_rrf_score`.
+RRF scores are not native hybrid scores, similarities or probabilities.
+Raw metrics are available only when that branch returned the candidate. A missing
+metric does not mean zero or prove there was no keyword match outside top-K.
+A value below a branch threshold is still reported if another branch retained it.
 
-The two probes share an independent five-second phase by running concurrently,
-with each query bounded by the configured timeout. The relevance-filter deadline
-is not applied to diagnostics: slow retrieval must not consume its probe budget.
-Upstream cancellation still propagates and cancels both probes. Probe failures
-never replace search results. This does not extend Backend's overall HTTP timeout;
-if the caller cancels, diagnostic collection may still be incomplete.
-Enabling diagnostics can consume end-to-end search time; separate
-search.diagnostics.duration_ms when evaluating normal search performance.
+Per-metric statuses distinguish `ok`, `below_threshold`, `missing`, `not_in_recall`,
+`disabled` and `error`. Unavailable numeric attributes are omitted.
+Distance metric names come from the already-loaded collection schema; unknown
+metrics are labeled unknown, not assumed to be cosine. No extra schema read occurs.
 
-The original BM25 score is measured in a candidate-filtered query using the same
-query text and WORD properties, not extracted from hybrid explain_score. It is
-not a global BM25 rank. A successful diagnostic match does not prove that the
-object participated in the original hybrid keyword top-K. Corpus updates between
-retrieval and probes can produce missing metadata.
-
-## Trace events
-
-The existing WeaviateVectorDB._hybrid_query span receives search.candidate events:
-
-- candidate.uuid and candidate.rank: object UUID and one-based post-fusion rank
-- chunk.chunk_id / chunk.resource_id: join keys for relevance.chunk events
-- message.id: join key for message records, when present
-- candidate.vector_distance and candidate.distance_metric
-- candidate.word_bm25_score and candidate.gse_bm25_score: raw keyword scores
-- candidate.hybrid_score: Weaviate hybrid score, before the application GSE fusion
-- candidate.final_score: application-fused score
-- candidate.hybrid_returned / candidate.gse_returned: presence in original responses
-- candidate.vector_status / candidate.word_bm25_status / candidate.gse_bm25_status
-
-Distance metrics come from the already-loaded collection schema. Unknown metrics
-are labeled unknown, never assumed to be cosine. No extra schema query is added.
-Never interpret hybrid/final scores as probabilities or raw vector similarities.
-
-Statuses distinguish ok, missing metadata, not_matched (successful WORD probe only),
-not_in_recall (GSE top-K absence), disabled, error, and timeout.
-Unavailable numeric attributes are omitted, not replaced by zero or null.
-GSE absence from top-K does not prove that the text has no matching Chinese terms.
-
-Span attributes include diagnostic status, candidate/recorded/truncated counts,
-per-probe status, metric, and duration_ms. Only the first max_candidates selected
-objects are probed/emitted; the search result slice itself is never truncated.
-The 100-event ceiling leaves room within OpenTelemetry's default 128-event limit.
-Custom lower exporter/SDK limits may still drop events and should be monitored.
-
-The new events contain IDs and numeric/status metadata, not titles, snippets,
-vectors, URLs, exception payloads, or credentials. Existing trace attributes are
-unchanged. Internal search metadata is not added to the public response schema.
+Branch attributes report returned/accepted/rejected counts, status and lookahead.
+Vector distance filtering happens on the server, so its rejected count does not
+include objects discarded inside Weaviate. Overall status is partial on branch failure.
+Diagnostics report candidate/recorded/truncated counts and `extra_query_count=0`.
+At most 100 events are emitted per span (configurable from 1 to 100); this does not
+truncate retrieval. Exporter or SDK event limits may still drop events.
+Events contain no titles, snippets, URLs, vectors, error payloads or credentials.

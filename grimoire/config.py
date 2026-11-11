@@ -16,8 +16,13 @@ class WeaviateConfig(BaseModel):
 
 class SearchDiagnosticsConfig(BaseModel):
     enabled: bool = True
-    timeout_sec: float = Field(default=5.0, gt=0, le=5)
     max_candidates: int = Field(default=100, ge=1, le=100)
+
+
+class SearchThresholdsConfig(BaseModel):
+    max_distance: float | None = Field(default=0.5, ge=0, le=2, allow_inf_nan=False)
+    word_min_bm25_score: float | None = Field(default=1.0, ge=0, allow_inf_nan=False)
+    gse_min_bm25_score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class VectorConfig(BaseModel):
@@ -27,6 +32,9 @@ class VectorConfig(BaseModel):
     dimension: int = Field(default=1536)
     search_diagnostics: SearchDiagnosticsConfig = Field(
         default_factory=SearchDiagnosticsConfig
+    )
+    search_thresholds: SearchThresholdsConfig = Field(
+        default_factory=SearchThresholdsConfig
     )
 
 

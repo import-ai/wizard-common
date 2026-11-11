@@ -26,7 +26,8 @@ def leaves(node):
 async def test_search_filters_by_resource_ids(resource_ids):
     db = object.__new__(WeaviateVectorDB)
     collection = AsyncMock()
-    collection.query.hybrid.return_value = SearchResponse([])
+    collection.query.near_vector.return_value = SearchResponse([])
+    collection.query.bm25.return_value = SearchResponse([])
     db._get_shard = AsyncMock(return_value=collection)
     db._embed = AsyncMock(return_value=[[1.0]])
 
@@ -41,7 +42,14 @@ async def test_search_filters_by_resource_ids(resource_ids):
     )
 
     assert records == []
-    wire = _FilterToREST.convert(collection.query.hybrid.call_args.kwargs["filters"])
+    calls = [
+        collection.query.near_vector.call_args,
+        *collection.query.bm25.call_args_list,
+    ]
+    assert len(calls) == 2
+    wires = [_FilterToREST.convert(call.kwargs["filters"]) for call in calls]
+    assert all(wire == wires[0] for wire in wires)
+    wire = wires[0]
     resource_filters = [
         leaf for leaf in leaves(wire) if leaf.get("path") == ["chunk_resource_id"]
     ]

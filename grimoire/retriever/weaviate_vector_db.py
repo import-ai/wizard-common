@@ -1,8 +1,5 @@
 import asyncio
-import json
-import logging
 import re
-from dataclasses import asdict
 from functools import partial
 from typing import Any, List, Tuple
 from uuid import NAMESPACE_URL, uuid5
@@ -12,12 +9,17 @@ import weaviate.classes as wvc
 from common.trace_info import TraceInfo
 from openai import AsyncOpenAI
 from opentelemetry import propagate, trace
+from pydantic import BaseModel
 from weaviate.exceptions import (
     WeaviateDeleteManyError,
     WeaviateQueryError,
 )
 
-from wizard_common.grimoire.config import VectorConfig
+from wizard_common.grimoire.config import (
+    SearchDiagnosticsConfig,
+    SearchThresholdsConfig,
+    VectorConfig,
+)
 from wizard_common.grimoire.entity.chunk import Chunk, ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordType
 from wizard_common.grimoire.entity.message import Message, OpenAIMessage
@@ -33,9 +35,13 @@ from wizard_common.grimoire.retriever.search_diagnostics import (
     distance_metric,
     record_candidates,
 )
+from wizard_common.grimoire.retriever.search_retrieval import (
+    RetrievalWindow,
+    RetrievedCandidate,
+    retrieve_window,
+)
 from wizard_common.worker.retry import RetryableTaskError
 
-logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 COLLECTION_NAME = "omnibox_index"
 MESSAGE_CHUNK_SIZE = 2000
@@ -51,10 +57,6 @@ GSE_QUERY_PROPERTIES = [
     "message_content_gse",
     "resource_tag_names_gse",
 ]
-ALPHA = 0.5
-RRF_K = 60
-GSE_LEG_WEIGHT = 1 - ALPHA
-GSE_ERROR_MAX_LENGTH = 500
 
 
 def split_message_content(content: str, chunk_size: int = MESSAGE_CHUNK_SIZE):
@@ -69,6 +71,11 @@ def split_message_content(content: str, chunk_size: int = MESSAGE_CHUNK_SIZE):
             text = paragraph[offset : offset + chunk_size]
             chunks.append((text, start + offset, start + offset + len(text)))
     return chunks
+
+
+class VectorSearchPage(BaseModel):
+    records: list[IndexRecord]
+    has_more: bool
 
 
 class WeaviateVectorDB:
@@ -311,21 +318,76 @@ class WeaviateVectorDB:
         )
         return [item.embedding for item in embeddings.data]
 
-    @staticmethod
-    def _is_tenant_not_found(error: BaseException) -> bool:
-        # gRPC path can return tenant-not-found as query error.
-        return (
-            isinstance(error, WeaviateQueryError)
-            and "tenant not found" in str(error).lower()
-        )
-
-    @staticmethod
-    def _metadata_score(obj: Any) -> float:
-        if obj.metadata and obj.metadata.score is not None:
-            return float(obj.metadata.score)
-        return 0.0
+    @property
+    def retrieval_signature(self) -> str:
+        return "split-thresholds-v1:" + self.config.search_thresholds.model_dump_json()
 
     @tracer.start_as_current_span("WeaviateVectorDB._hybrid_query")
+    async def _retrieve_window(
+        self,
+        namespace_id: str,
+        query: str,
+        condition: Condition,
+        limit: int,
+        offset: int = 0,
+    ) -> RetrievalWindow:
+        collection = await self._get_shard(namespace_id)
+        filters = condition.to_weaviate_filters()
+        span = trace.get_current_span()
+        span.set_attribute("weaviate.hybrid.condition", condition.model_dump_json())
+        if not query:
+            try:
+                response = await collection.query.fetch_objects(
+                    filters=filters,
+                    limit=offset + limit + 1,
+                    return_metadata=wvc.query.MetadataQuery.full(),
+                )
+            except WeaviateQueryError as error:
+                if "tenant not found" in str(error).lower():
+                    return RetrievalWindow()
+                raise
+            candidates = [
+                RetrievedCandidate(
+                    uuid=str(obj.uuid),
+                    properties=obj.properties or {},
+                    final_score=float(getattr(obj.metadata, "score", None) or 0),
+                )
+                for obj in response.objects
+            ]
+            candidates.sort(key=lambda c: c.final_score, reverse=True)
+            return RetrievalWindow(
+                candidates=candidates[offset : offset + limit],
+                has_more=len(candidates) > offset + limit,
+            )
+        config = getattr(self, "config", None)
+        thresholds = config.search_thresholds if config else SearchThresholdsConfig()
+        window = await retrieve_window(
+            collection=collection,
+            embed=self._embed,
+            query=query,
+            gse_query=self._strip_english_letters(query),
+            filters=filters,
+            thresholds=thresholds,
+            word_properties=WORD_QUERY_PROPERTIES,
+            gse_properties=GSE_QUERY_PROPERTIES,
+            offset=offset,
+            limit=limit,
+            span=span,
+        )
+        diagnostics = config.search_diagnostics if config else SearchDiagnosticsConfig()
+        if diagnostics.enabled and span.is_recording():
+            try:
+                record_candidates(
+                    span=span,
+                    config=diagnostics,
+                    window=window,
+                    metric=getattr(self, "_distance_metric", "unknown"),
+                    offset=offset,
+                )
+            except Exception:
+                span.set_attribute("search.diagnostics.status", "error")
+        return window
+
     async def _hybrid_query(
         self,
         namespace_id: str,
@@ -334,160 +396,10 @@ class WeaviateVectorDB:
         limit: int,
         offset: int = 0,
     ) -> List[Tuple[dict, float]]:
-        collection = await self._get_shard(namespace_id)
-        search_limit = limit + offset
-        filters = condition.to_weaviate_filters()
-        span = trace.get_current_span()
-
-        if not query:
-            try:
-                response = await collection.query.fetch_objects(
-                    filters=filters,
-                    limit=search_limit,
-                    return_metadata=wvc.query.MetadataQuery.full(),
-                )
-            except WeaviateQueryError as e:
-                if "tenant not found" in str(e).lower():
-                    return []
-                raise
-            span.set_attributes(
-                {
-                    "weaviate.hybrid.query": query,
-                    "weaviate.hybrid.condition": condition.model_dump_json(),
-                    "weaviate.hybrid.object_count": len(response.objects),
-                    "weaviate.hybrid.response": json.dumps(
-                        asdict(response), ensure_ascii=False, default=str
-                    ),
-                }
-            )
-            hits: list[Tuple[dict, float]] = []
-            for obj in response.objects:
-                properties = obj.properties or {}
-                score = 0.0
-                if obj.metadata and obj.metadata.score is not None:
-                    score = float(obj.metadata.score)
-                elif obj.metadata and obj.metadata.certainty is not None:
-                    score = float(obj.metadata.certainty)
-                hits.append((properties, score))
-            hits.sort(key=lambda x: x[1], reverse=True)
-            return hits[offset : offset + limit]
-
-        gse_query = self._strip_english_letters(query)
-        gse_leg_enabled = any(character.isalnum() for character in gse_query)
-        gse_response = None
-        gse_error: BaseException | None = None
-        if gse_leg_enabled:
-            embedding, gse_result = await asyncio.gather(
-                self._embed(query),
-                collection.query.bm25(
-                    query=gse_query,
-                    query_properties=GSE_QUERY_PROPERTIES,
-                    filters=filters,
-                    limit=search_limit,
-                    return_metadata=wvc.query.MetadataQuery(score=True),
-                ),
-                return_exceptions=True,
-            )
-            if isinstance(gse_result, BaseException):
-                gse_error = gse_result
-            else:
-                gse_response = gse_result
-        else:
-            embedding = await self._embed(query)
-
-        if self._is_tenant_not_found(embedding) or (
-            gse_error is not None and self._is_tenant_not_found(gse_error)
-        ):
-            return []
-        if isinstance(embedding, BaseException):
-            raise embedding
-
-        try:
-            response = await collection.query.hybrid(
-                query=query,
-                query_properties=WORD_QUERY_PROPERTIES,
-                vector=embedding[0],
-                alpha=ALPHA,
-                fusion_type=wvc.query.HybridFusion.RANKED,
-                filters=filters,
-                limit=search_limit,
-                return_metadata=wvc.query.MetadataQuery.full(),
-            )
-        except WeaviateQueryError as e:
-            if "tenant not found" in str(e).lower():
-                return []
-            raise
-
-        fused: dict[str, dict[str, Any]] = {}
-        for obj in response.objects:
-            fused[str(obj.uuid)] = {
-                "properties": obj.properties or {},
-                "score": self._metadata_score(obj),
-            }
-
-        gse_objects = gse_response.objects if gse_response is not None else []
-        gse_ranked = sorted(
-            ((self._metadata_score(obj), str(obj.uuid), obj) for obj in gse_objects),
-            key=lambda item: (-item[0], item[1]),
+        window = await self._retrieve_window(
+            namespace_id, query, condition, limit, offset
         )
-        for rank, (_, uuid_str, obj) in enumerate(gse_ranked):
-            entry = fused.setdefault(
-                uuid_str, {"properties": obj.properties or {}, "score": 0.0}
-            )
-            entry["score"] += GSE_LEG_WEIGHT / (rank + RRF_K)
-
-        fused_hits = sorted(
-            fused.items(), key=lambda item: (-item[1]["score"], item[0])
-        )
-
-        span.set_attributes(
-            {
-                "weaviate.hybrid.query": query,
-                "weaviate.hybrid.condition": condition.model_dump_json(),
-                "weaviate.hybrid.object_count": len(response.objects),
-                "weaviate.hybrid.response": json.dumps(
-                    asdict(response), ensure_ascii=False, default=str
-                ),
-                "weaviate.hybrid.gse_query": gse_query,
-                "weaviate.hybrid.gse_leg": gse_leg_enabled,
-                "weaviate.hybrid.gse_object_count": len(gse_objects),
-                "weaviate.hybrid.fused_object_count": len(fused),
-            }
-        )
-        if gse_error is not None:
-            message = " ".join(str(gse_error).split())[:GSE_ERROR_MAX_LENGTH]
-            span.set_attribute("weaviate.hybrid.gse_error", message)
-            logger.warning(
-                "Weaviate GSE leg failed, falling back to hybrid results: %s", message
-            )
-
-        selected = fused_hits[offset : offset + limit]
-        config = getattr(self, "config", None)
-        if (
-            config is not None
-            and config.search_diagnostics.enabled
-            and span.is_recording()
-        ):
-            try:
-                await record_candidates(
-                    collection=collection,
-                    span=span,
-                    config=config.search_diagnostics,
-                    query=query,
-                    vector=embedding[0],
-                    filters=filters,
-                    word_properties=WORD_QUERY_PROPERTIES,
-                    selected=selected,
-                    hybrid_objects=response.objects,
-                    gse_objects=gse_objects,
-                    gse_enabled=gse_leg_enabled,
-                    gse_failed=gse_error is not None,
-                    metric=self._distance_metric,
-                    offset=offset,
-                )
-            except Exception:
-                span.set_attribute("search.diagnostics.status", "error")
-        return [(entry["properties"], entry["score"]) for _, entry in selected]
+        return [(c.properties, c.final_score) for c in window.candidates]
 
     @staticmethod
     def _chunk_from_flat_doc(doc: dict) -> Chunk:
@@ -694,6 +606,37 @@ class WeaviateVectorDB:
             # Tenant not found (no data yet for this namespace)
             pass
 
+    async def search_page(
+        self,
+        query: str,
+        namespace_id: str,
+        user_id: str | None,
+        record_type: IndexRecordType | None,
+        offset: int,
+        limit: int,
+        conversation_ids: list[str] | None = None,
+        exclude_conversation_ids: list[str] | None = None,
+        resource_ids: list[str] | None = None,
+    ) -> VectorSearchPage:
+        condition = Condition(
+            conversation_ids=conversation_ids,
+            exclude_conversation_ids=exclude_conversation_ids,
+            namespace_id=namespace_id,
+            user_id=user_id,
+            record_type=record_type.value if record_type else None,
+            resource_ids=resource_ids,
+        )
+        window = await self._retrieve_window(
+            namespace_id, query, condition, limit, offset
+        )
+        return VectorSearchPage(
+            records=[
+                self._index_record_from_flat_doc(c.properties)
+                for c in window.candidates
+            ],
+            has_more=window.has_more,
+        )
+
     @tracer.start_as_current_span("WeaviateVectorDB.search")
     async def search(
         self,
@@ -707,23 +650,18 @@ class WeaviateVectorDB:
         exclude_conversation_ids: list[str] | None = None,
         resource_ids: list[str] | None = None,
     ) -> List[IndexRecord]:
-        condition = Condition(
-            conversation_ids=conversation_ids,
-            exclude_conversation_ids=exclude_conversation_ids,
-            namespace_id=namespace_id,
-            user_id=user_id,
-            record_type=record_type.value if record_type else None,
-            resource_ids=resource_ids,
+        page = await self.search_page(
+            query,
+            namespace_id,
+            user_id,
+            record_type,
+            offset,
+            limit,
+            conversation_ids,
+            exclude_conversation_ids,
+            resource_ids,
         )
-
-        hits = await self._hybrid_query(
-            namespace_id=namespace_id,
-            query=query,
-            condition=condition,
-            limit=limit,
-            offset=offset,
-        )
-        return [self._index_record_from_flat_doc(hit) for hit, _ in hits]
+        return page.records
 
     @tracer.start_as_current_span("WeaviateVectorDB.query_chunks")
     async def query_chunks(
