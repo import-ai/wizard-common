@@ -5,6 +5,7 @@ from openai import NOT_GIVEN, NotGiven
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from wizard_common.config import OpenAIConfig
+from wizard_common.grimoire.agent.loop_guard import LoopGuardConfig
 
 
 class WeaviateConfig(BaseModel):
@@ -137,3 +138,4 @@ class GrimoireAgentConfig(BaseModel):
     grimoire: GrimoireConfig
     tools: ToolsConfig
     max_tool_rounds: int = Field(default=10, ge=1)
+    loop_guard: LoopGuardConfig = Field(default_factory=LoopGuardConfig.for_basic)

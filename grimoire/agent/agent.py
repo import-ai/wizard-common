@@ -17,12 +17,19 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from opentelemetry import propagate, trace
 
+from wizard_common.grimoire.agent.loop_guard import (
+    GuardAction,
+    GuardDecision,
+    GuardReason,
+    LoopGuard,
+    compose_loop_guard_telemetry,
+    render_guard_model_note,
+    render_guard_user_text,
+    render_guard_warn_note,
+    render_loop_stop_instruction,
+)
 from wizard_common.grimoire.agent.saved_resource import saved_resource_prompt_content
 from wizard_common.grimoire.agent.tool_executor import ToolExecutor
-from wizard_common.grimoire.agent.tool_loop import (
-    MODEL_TOOL_STOP_NOTE,
-    canonical_tool_key,
-)
 from wizard_common.grimoire.agent.tps_calculator import TPSCalculator
 from wizard_common.grimoire.base_streamable import BaseStreamable, ChatResponse
 from wizard_common.grimoire.config import GrimoireAgentConfig
@@ -449,6 +456,7 @@ class Agent(BaseSearchableAgent):
         self.openai = config.grimoire.openai
 
         self.max_tool_rounds = config.max_tool_rounds
+        self.loop_guard_config = config.loop_guard
         self.template_parser = TemplateParser(
             base_dir=str(files("wizard_common") / "resources" / "prompt_templates")
         )
@@ -478,61 +486,128 @@ class Agent(BaseSearchableAgent):
         )
         yield ChatEOSResponse()
 
-    def _split_tool_calls(
+    def _guard_tool_calls(
         self,
         tool_calls: list[dict],
-        seen_calls: set[tuple[str, str]],
+        guard: LoopGuard,
+        round_index: int,
         over_limit: bool,
-    ) -> tuple[list[dict], list[dict]]:
-        execute: list[dict] = []
-        skipped: list[dict] = []
+    ) -> tuple[list[tuple[dict, GuardDecision]], list[tuple[dict, GuardDecision]]]:
+        execute: list[tuple[dict, GuardDecision]] = []
+        skipped: list[tuple[dict, GuardDecision]] = []
         for tool_call in tool_calls:
             function = tool_call.get("function") or {}
-            key = canonical_tool_key(
-                str(function.get("name") or ""), function.get("arguments")
+            decision = guard.decide(
+                tool_call_id=str(tool_call.get("id") or ""),
+                name=str(function.get("name") or ""),
+                args=function.get("arguments"),
+                round_index=round_index,
+                over_limit=over_limit,
             )
-            if over_limit or key in seen_calls:
-                skipped.append(tool_call)
-                continue
-            seen_calls.add(key)
-            execute.append(tool_call)
+            target = (
+                execute
+                if decision.action in (GuardAction.EXECUTE, GuardAction.WARN)
+                else skipped
+            )
+            target.append((tool_call, decision))
         return execute, skipped
 
-    def _skipped_tool_message(self, tool_call: dict) -> MessageDto:
+    def _record_guard_result(
+        self,
+        guard: LoopGuard,
+        message_dto: MessageDto,
+        decisions: dict[str, GuardDecision],
+    ) -> None:
+        tool_call_id = str(message_dto.message.get("tool_call_id") or "")
+        decision = decisions.get(tool_call_id)
+        if decision is None:
+            return
+        attrs = message_dto.attrs
+        attrs_dict = attrs.model_dump(exclude_none=True) if attrs else None
+        changed = guard.record_result(
+            tool_call_id, message_dto.message.get("content"), attrs_dict
+        )
+        failed = bool(
+            attrs and attrs.tool_call and attrs.tool_call.get("status") == "failed"
+        )
+        content = message_dto.message.get("content")
+        if (
+            decision.action is GuardAction.WARN
+            and not changed
+            and not failed
+            and isinstance(content, str)
+        ):
+            message_dto.message["content"] = (
+                content + "\n\n" + render_guard_warn_note(decision)
+            )
+
+    def _guard_tool_message(self, decision: GuardDecision) -> MessageDto:
         return MessageDto.model_validate(
             {
                 "message": {
                     "role": "tool",
-                    "tool_call_id": str(tool_call.get("id") or ""),
-                    "content": MODEL_TOOL_STOP_NOTE,
+                    "tool_call_id": decision.tool_call_id,
+                    "content": render_guard_model_note(decision),
                 },
-                "attrs": {"tool_call": {"status": "success"}},
+                "attrs": {"tool_call": {"status": "stopped"}},
             }
         )
 
-    async def _yield_skipped_tool(self, tool_call: dict):
+    async def _yield_guard_tool(
+        self, tool_call: dict, decision: GuardDecision, lang: str | None
+    ):
         visible = MessageDto.model_validate(
             {
                 "message": {
                     "role": "tool",
-                    "tool_call_id": str(tool_call.get("id") or ""),
-                    "content": "",
+                    "tool_call_id": decision.tool_call_id,
+                    "content": render_guard_user_text(decision, lang),
                 },
-                "attrs": {"tool_call": {"status": "success"}},
+                "attrs": {
+                    "tool_call": {
+                        "status": "stopped",
+                        "reason": (
+                            decision.reason.value
+                            if decision.reason is not None
+                            else None
+                        ),
+                    }
+                },
             }
         )
         yield ChatBOSResponse(role="tool")
         yield ChatDeltaResponse.model_validate(visible.model_dump(exclude_none=True))
         yield ChatEOSResponse()
 
-    async def _close_forced_assistant(self, message_dto: MessageDto, lang: str | None):
+    def _loop_guard_telemetry(
+        self,
+        guard: LoopGuard,
+        stop_reason: str,
+        stop_tool_name: str | None,
+        tool_rounds: int,
+    ) -> dict:
+        telemetry = guard.telemetry(tool_rounds)
+        if telemetry is not None:
+            return telemetry
+        return compose_loop_guard_telemetry(
+            stop_reason,
+            stop_tool_name,
+            tool_rounds,
+            blocked_count=guard.blocked_count,
+        )
+
+    async def _close_forced_assistant(
+        self, message_dto: MessageDto, lang: str | None, reason: str | None = None
+    ):
         message = message_dto.message
         if not message.get("tool_calls") and str(message.get("content") or "").strip():
             return
         content = str(message.get("content") or "").strip()
         if not content:
             content = self.template_parser.render_template(
-                self.tool_loop_fallback_template, lang=lang or "简体中文"
+                self.tool_loop_fallback_template,
+                lang=lang or "简体中文",
+                reason=reason,
             )
             yield ChatDeltaResponse.model_validate({"message": {"content": content}})
         message["content"] = content
@@ -548,6 +623,7 @@ class Agent(BaseSearchableAgent):
         edition: str = "basic",
         trace_info: TraceInfo | None = None,
         tps_calculator: TPSCalculator | None = None,
+        message_attrs: dict | None = None,
     ) -> AsyncIterable[ChatResponse | MessageDto]:
         chunks: list[dict] = []
         with tracer.start_as_current_span("agent.chat") as span:
@@ -677,6 +753,11 @@ class Agent(BaseSearchableAgent):
                     {"message": {"tool_calls": tool_calls}}
                 )
 
+            if message_attrs:
+                yield ChatDeltaResponse.model_validate(
+                    {"message": {}, "attrs": message_attrs}
+                )
+
             yield ChatEOSResponse()
             span.set_attributes(
                 {
@@ -785,18 +866,34 @@ class Agent(BaseSearchableAgent):
             system_prompt: str = self.template_parser.render_template(
                 self.system_prompt_template
             )
-            seen_calls: set[tuple[str, str]] = set()
+            guard = LoopGuard(self.loop_guard_config)
             tool_rounds = 0
             force_final = False
             stop_reason = "completed"
+            stop_tool_name: str | None = None
+            loop_guard_telemetry: dict | None = None
             tps_calculator = TPSCalculator()
             try:
                 while True:
                     held_eos: ChatEOSResponse | None = None
                     held_tool_delta: ChatDeltaResponse | None = None
+                    chat_system_prompt = system_prompt
+                    chat_message_attrs: dict | None = None
+                    if force_final:
+                        loop_guard_telemetry = self._loop_guard_telemetry(
+                            guard, stop_reason, stop_tool_name, tool_rounds
+                        )
+                        chat_message_attrs = {
+                            "context": {"loop_guard": loop_guard_telemetry}
+                        }
+                        chat_system_prompt = (
+                            system_prompt
+                            + "\n\n"
+                            + render_loop_stop_instruction(stop_reason)
+                        )
                     chat_stream = self.chat(
                         messages=[
-                            {"role": "system", "content": system_prompt},
+                            {"role": "system", "content": chat_system_prompt},
                             *UserQueryPreprocessor.message_dtos_to_openai_messages(
                                 [*history_view, *messages[history_len:]]
                             ),
@@ -807,6 +904,7 @@ class Agent(BaseSearchableAgent):
                         tools=None if force_final else tool_executor.tools,
                         trace_info=trace_info,
                         tps_calculator=tps_calculator,
+                        message_attrs=chat_message_attrs,
                     )
                     async with aclosing(chat_stream):
                         async for chunk in chat_stream:
@@ -829,7 +927,7 @@ class Agent(BaseSearchableAgent):
                     if force_final or not tool_calls:
                         if force_final:
                             async for chunk in self._close_forced_assistant(
-                                messages[-1], agent_request.lang
+                                messages[-1], agent_request.lang, stop_reason
                             ):
                                 yield chunk
                         else:
@@ -845,17 +943,34 @@ class Agent(BaseSearchableAgent):
                         yield held_eos
                     tool_rounds += 1
                     over_limit = tool_rounds > self.max_tool_rounds
-                    execute, skipped = self._split_tool_calls(
-                        tool_calls, seen_calls, over_limit
+                    execute, skipped = self._guard_tool_calls(
+                        tool_calls, guard, tool_rounds, over_limit
                     )
+                    stop_decisions = [
+                        decision
+                        for _, decision in skipped
+                        if decision.action is GuardAction.STOP
+                    ]
                     if over_limit:
                         stop_reason = "round_limit"
-                    elif skipped:
-                        stop_reason = "duplicate"
+                        if stop_tool_name is None and skipped:
+                            stop_tool_name = skipped[0][1].tool_name
+                    elif stop_decisions:
+                        last_stop = stop_decisions[-1]
+                        stop_reason = (
+                            last_stop.reason.value
+                            if last_stop.reason is not None
+                            else GuardReason.DUPLICATE.value
+                        )
                     if execute:
                         assistant_message = messages[-1].message
                         saved_calls = assistant_message["tool_calls"]
-                        assistant_message["tool_calls"] = execute
+                        assistant_message["tool_calls"] = [
+                            tool_call for tool_call, _ in execute
+                        ]
+                        decisions = {
+                            decision.tool_call_id: decision for _, decision in execute
+                        }
                         try:
                             async for chunk in tool_executor.astream(
                                 messages,
@@ -863,6 +978,7 @@ class Agent(BaseSearchableAgent):
                             ):
                                 if isinstance(chunk, MessageDto):
                                     messages.append(chunk)
+                                    self._record_guard_result(guard, chunk, decisions)
                                 elif isinstance(chunk, ChatBaseResponse):
                                     yield chunk
                                 else:
@@ -871,14 +987,30 @@ class Agent(BaseSearchableAgent):
                                     )
                         finally:
                             assistant_message["tool_calls"] = saved_calls
-                    for tool_call in skipped:
-                        async for chunk in self._yield_skipped_tool(tool_call):
+                    for tool_call, decision in skipped:
+                        async for chunk in self._yield_guard_tool(
+                            tool_call, decision, agent_request.lang
+                        ):
                             yield chunk
-                        messages.append(self._skipped_tool_message(tool_call))
-                    force_final = over_limit or bool(skipped)
+                        messages.append(self._guard_tool_message(decision))
+                    force_final = over_limit or bool(stop_decisions)
             except asyncio.CancelledError:
                 stop_reason = "cancelled"
                 raise
             finally:
                 span.set_attribute("agent.tool_rounds", tool_rounds)
                 span.set_attribute("agent.stop_reason", stop_reason)
+                span.set_attribute(
+                    "agent.loop_guard.blocked_count", guard.blocked_count
+                )
+                if loop_guard_telemetry is not None and stop_reason != "cancelled":
+                    for key in (
+                        "stop_reason",
+                        "tool_name",
+                        "repeat_count",
+                        "cycle_length",
+                        "detail",
+                    ):
+                        value = loop_guard_telemetry.get(key)
+                        if value is not None:
+                            span.set_attribute(f"agent.loop_guard.{key}", value)
