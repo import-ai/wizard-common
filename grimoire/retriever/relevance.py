@@ -1,6 +1,8 @@
 import asyncio
 import json
+import logging
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypeVar
@@ -13,6 +15,7 @@ from wizard_common.grimoire.config import RelevanceConfig
 from wizard_common.grimoire.entity.chunk import ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordType
 
+logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 # OTel Python keeps 128 events per span by default; reserve one slot for the
@@ -32,6 +35,7 @@ class SearchFilterResult:
 class _BatchOutcome:
     status: str
     scores: dict[int, float | None] = field(default_factory=dict)
+    unexpected_error: bool = False
 
 
 BING_QUESTION = {
@@ -95,10 +99,21 @@ class DecisionResponse(BaseModel):
     answers: dict[str, DecisionAnswer]
 
 
+def _normalize_title(value: str) -> str:
+    return "".join(
+        character
+        for character in value.casefold()
+        if not character.isspace()
+        and not unicodedata.category(character).startswith("P")
+    )
+
+
 def _title_matches(query: str, title: str | None) -> bool:
-    normalized_query = query.strip().casefold()
-    normalized_title = (title or "").strip().casefold()
-    if not normalized_query or not normalized_title:
+    normalized_query = _normalize_title(query)
+    normalized_title = _normalize_title(title or "")
+    # A one-character side protects nothing: any short query would otherwise
+    # match every title that contains it.
+    if min(len(normalized_query), len(normalized_title)) < 2:
         return False
     return normalized_query in normalized_title or normalized_title in normalized_query
 
@@ -236,8 +251,7 @@ class RelevanceChecker:
         answer_prefix: str,
         partial: bool,
         timeout: float | None = None,
-        protected: Callable[[Item], bool] | None = None,
-        on_decision: Callable[[int, float | None, str], None] | None = None,
+        on_decision: Callable[[int, float | None], None] | None = None,
     ) -> list[Item]:
         questions = {
             f"{answer_prefix}{index}": {
@@ -265,19 +279,10 @@ class RelevanceChecker:
         kept: list[Item] = []
         for index, item in enumerate(items):
             score = scores.get(f"{answer_prefix}{index}")
-            if protected is not None and protected(item):
+            if score is None or score < threshold:
                 kept.append(item)
-                decision = "title_protected"
-            elif score is None:
-                kept.append(item)
-                decision = "answer_missing"
-            elif score < threshold:
-                kept.append(item)
-                decision = "kept"
-            else:
-                decision = "off_target"
             if on_decision is not None:
-                on_decision(index, score, decision)
+                on_decision(index, score)
         return kept
 
     @tracer.start_as_current_span("RelevanceChecker.bing")
@@ -356,7 +361,7 @@ class RelevanceChecker:
                     return _BatchOutcome("deadline")
                 scores: dict[int, float | None] = {}
 
-                def collect(index: int, score: float | None, _decision: str) -> None:
+                def collect(index: int, score: float | None) -> None:
                     scores[index] = score
 
                 try:
@@ -402,8 +407,14 @@ class RelevanceChecker:
         for task, index in tasks.items():
             if task.cancelled():
                 outcomes[index] = _BatchOutcome("deadline")
-            elif task.exception() is not None:
-                outcomes[index] = _BatchOutcome("error")
+            elif (error := task.exception()) is not None:
+                message = " ".join(str(error).split())[:500]
+                logger.warning(
+                    "Unexpected relevance batch failure: %s: %s",
+                    type(error).__name__,
+                    message,
+                )
+                outcomes[index] = _BatchOutcome("error", unexpected_error=True)
             else:
                 outcomes[index] = task.result()
         return outcomes
@@ -458,7 +469,9 @@ class RelevanceChecker:
         scores: list[float | None] = [None] * len(chunk_records)
         statuses = ["deadline"] * len(chunk_records)
         batch_status = ["deadline"] * len(batches)
-        retried_batches = 0
+        retried_error_batches = 0
+        retried_answer_batches = 0
+        unexpected_batch_errors = 0
 
         def apply_outcome(batch_index: int, outcome: _BatchOutcome) -> None:
             batch_status[batch_index] = outcome.status
@@ -470,6 +483,7 @@ class RelevanceChecker:
                     scores[position] = outcome.scores.get(local)
 
         outcomes = await self._run_search_batches(query, batches, deadline=deadline)
+        unexpected_batch_errors += sum(outcome.unexpected_error for outcome in outcomes)
         for batch_index, outcome in enumerate(outcomes):
             apply_outcome(batch_index, outcome)
 
@@ -477,9 +491,12 @@ class RelevanceChecker:
             index for index, outcome in enumerate(outcomes) if outcome.status == "error"
         ]
         if failed_indexes and deadline - time.monotonic() > 0:
-            retried_batches += len(failed_indexes)
+            retried_error_batches += len(failed_indexes)
             retry_outcomes = await self._run_search_batches(
                 query, [batches[index] for index in failed_indexes], deadline=deadline
+            )
+            unexpected_batch_errors += sum(
+                outcome.unexpected_error for outcome in retry_outcomes
             )
             for batch_index, outcome in zip(failed_indexes, retry_outcomes):
                 apply_outcome(batch_index, outcome)
@@ -496,13 +513,21 @@ class RelevanceChecker:
                 missing_positions[start : start + batch_size]
                 for start in range(0, len(missing_positions), batch_size)
             ]
-            retried_batches += len(groups)
+            retried_answer_batches += len(groups)
             missing_outcomes = await self._run_search_batches(
                 query,
                 [[chunk_records[position] for position in group] for group in groups],
                 deadline=deadline,
             )
+            unexpected_batch_errors += sum(
+                outcome.unexpected_error for outcome in missing_outcomes
+            )
             for group, outcome in zip(groups, missing_outcomes):
+                if outcome.status == "deadline":
+                    # The shared budget ended during the follow-up retry.
+                    for position in group:
+                        statuses[position] = "deadline"
+                    continue
                 if outcome.status != "success":
                     continue
                 for local, position in enumerate(group):
@@ -609,7 +634,12 @@ class RelevanceChecker:
                 "relevance.succeeded_batches": succeeded_batches,
                 "relevance.failed_batches": failed_batches,
                 "relevance.skipped_batches": skipped_batches,
-                "relevance.retried_batches": retried_batches,
+                "relevance.retried_batches": (
+                    retried_error_batches + retried_answer_batches
+                ),
+                "relevance.retried_error_batches": retried_error_batches,
+                "relevance.retried_answer_batches": retried_answer_batches,
+                "relevance.unexpected_batch_errors": unexpected_batch_errors,
                 "relevance.batch_concurrency": SEARCH_BATCH_CONCURRENCY,
             }
         )

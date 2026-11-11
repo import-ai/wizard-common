@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 import traceback
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from wizard_common.grimoire.retriever.relevance import (
     RelevanceChecker,
     RelevanceError,
     SearchFilterResult,
+    _title_matches,
 )
 from wizard_common.grimoire.retriever.resource_search import ResourceSearch
 from wizard_common.grimoire.retriever.searxng import SearXNGRetrieval
@@ -510,6 +512,22 @@ async def test_search_sends_full_chunk_text_deduplicates_and_keeps_messages(
         await checker.aclose()
 
 
+@pytest.mark.parametrize(
+    "query,title,expected",
+    [
+        ("NEBULA610X", "a", False),
+        ("NEBULA610X", "610-11 NEBULA610X-标题编码.md", True),
+        ("笔记", "我的笔记.md", True),
+        ("笔记", "笔", False),
+        ("第二大脑", "打造第二大脑.md", True),
+        ("打造第二大脑笔记", "第二大脑", True),
+        (" query ", "QUERY.md", True),
+    ],
+)
+def test_title_matches_normalizes_and_requires_two_characters(query, title, expected):
+    assert _title_matches(query, title) is expected
+
+
 @pytest.mark.asyncio
 async def test_search_title_guard_keeps_matches_in_both_directions(monkeypatch):
     forward = search_record("one", title="打造第二大脑.md")
@@ -607,6 +625,9 @@ async def test_search_retries_answer_missing_items_once(monkeypatch):
     assert attributes["relevance.kept_count"] == 2
     assert attributes["relevance.pending_count"] == 0
     assert attributes["relevance.retried_batches"] == 1
+    assert attributes["relevance.retried_error_batches"] == 0
+    assert attributes["relevance.retried_answer_batches"] == 1
+    assert attributes["relevance.unexpected_batch_errors"] == 0
 
 
 @pytest.mark.asyncio
@@ -817,7 +838,91 @@ async def test_search_failed_batch_is_retried_once_then_pending(monkeypatch):
     attributes = span.set_attributes.call_args.args[0]
     assert attributes["relevance.status"] == "unavailable"
     assert attributes["relevance.retried_batches"] == 1
+    assert attributes["relevance.retried_error_batches"] == 1
+    assert attributes["relevance.retried_answer_batches"] == 0
+    assert attributes["relevance.unexpected_batch_errors"] == 0
     assert attributes["relevance.failed_batches"] == 1
+
+
+@pytest.mark.asyncio
+async def test_search_batch_timeout_is_retried_once_then_pending(monkeypatch):
+    records = [search_record("one"), search_record("two")]
+    requests = []
+
+    async def handle(request):
+        requests.append(request)
+        await asyncio.sleep(10)
+
+    install_transport(monkeypatch, handle)
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(
+        config(
+            search_enabled=True,
+            search_threshold=0.5,
+            search_timeout_sec=1.0,
+            timeout_sec=0.2,
+        )
+    )
+    try:
+        async with asyncio.timeout(3):
+            result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert result.kept == []
+    assert result.pending == records
+    assert len(requests) == 2
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert [item["chunk.decision"] for item in events] == ["pending", "pending"]
+    assert {item["chunk.pending_reason"] for item in events} == {"error"}
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes["relevance.status"] == "unavailable"
+    assert attributes["relevance.failed_batches"] == 1
+    assert attributes["relevance.retried_batches"] == 1
+    assert attributes["relevance.retried_error_batches"] == 1
+    assert attributes["relevance.retried_answer_batches"] == 0
+    assert attributes["relevance.unexpected_batch_errors"] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_logs_and_counts_unexpected_batch_errors(monkeypatch, caplog):
+    records = [search_record("one"), search_record("two")]
+    attempts = 0
+
+    async def failing_filter(query, items, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("boom")
+
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
+    monkeypatch.setattr(checker, "_filter_items", failing_filter)
+    span = install_span(monkeypatch)
+    caplog.set_level(
+        logging.WARNING, logger="wizard_common.grimoire.retriever.relevance"
+    )
+    try:
+        result = await checker.filter_search_results("query", records)
+    finally:
+        await checker.aclose()
+
+    assert attempts == 2
+    assert result.kept == []
+    assert result.pending == records
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "wizard_common.grimoire.retriever.relevance"
+    ]
+    assert len(warnings) == 2
+    assert all(
+        "Unexpected relevance batch failure" in item.message for item in warnings
+    )
+    assert all("RuntimeError" in item.getMessage() for item in warnings)
+    assert all("boom" in item.getMessage() for item in warnings)
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes["relevance.status"] == "unavailable"
+    assert attributes["relevance.unexpected_batch_errors"] == 2
+    assert attributes["relevance.retried_error_batches"] == 1
 
 
 @pytest.mark.asyncio
@@ -1075,6 +1180,9 @@ async def test_search_reports_status_and_counts_for_partial_batches(monkeypatch)
         "relevance.failed_batches": 2,
         "relevance.skipped_batches": 0,
         "relevance.retried_batches": 2,
+        "relevance.retried_error_batches": 2,
+        "relevance.retried_answer_batches": 0,
+        "relevance.unexpected_batch_errors": 0,
         "relevance.batch_concurrency": SEARCH_BATCH_CONCURRENCY,
     }
 
@@ -1172,6 +1280,51 @@ async def test_search_honors_a_caller_deadline_instead_of_resetting_the_budget(
         "title_protected",
     ]
     assert events[0]["chunk.pending_reason"] == "deadline"
+
+
+@pytest.mark.asyncio
+async def test_search_cancels_batches_still_in_flight_at_the_shared_deadline(
+    monkeypatch,
+):
+    records = [search_record("one"), search_record("two")]
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def hanging_filter(query, items, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    clients = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: clients.append(kwargs))
+    span = install_span(monkeypatch)
+    checker = RelevanceChecker(config(search_timeout_sec=10))
+    monkeypatch.setattr(checker, "_filter_items", hanging_filter)
+    before = asyncio.all_tasks()
+    try:
+        result = await checker.filter_search_results(
+            "query", records, deadline=time.monotonic() + 0.05
+        )
+    finally:
+        await checker.aclose()
+
+    assert started.is_set()
+    assert cancelled.is_set()
+    assert asyncio.all_tasks() - before == set()
+    assert clients == []
+    assert result.kept == []
+    assert result.pending == records
+    events = [call.args[1] for call in span.add_event.call_args_list]
+    assert [item["chunk.decision"] for item in events] == ["pending", "pending"]
+    assert {item["chunk.pending_reason"] for item in events} == {"deadline"}
+    attributes = span.set_attributes.call_args.args[0]
+    assert attributes["relevance.status"] == "unavailable"
+    assert attributes["relevance.succeeded_batches"] == 0
+    assert attributes["relevance.failed_batches"] == 0
+    assert attributes["relevance.skipped_batches"] == 1
+    assert attributes["relevance.retried_batches"] == 0
 
 
 @pytest.mark.asyncio
