@@ -14,11 +14,20 @@ class WeaviateConfig(BaseModel):
     api_key: str | None = Field(default=None)
 
 
+class SearchDiagnosticsConfig(BaseModel):
+    enabled: bool = False
+    timeout_sec: float = Field(default=0.2, gt=0, le=1)
+    max_candidates: int = Field(default=100, ge=1, le=100)
+
+
 class VectorConfig(BaseModel):
     embedding: OpenAIConfig
     weaviate: WeaviateConfig = Field(default_factory=WeaviateConfig)
     batch_size: int = Field(default=1)
     dimension: int = Field(default=1536)
+    search_diagnostics: SearchDiagnosticsConfig = Field(
+        default_factory=SearchDiagnosticsConfig
+    )
 
 
 GrimoireOpenAIConfigKey = Literal["mini", "default", "large", "vision"]

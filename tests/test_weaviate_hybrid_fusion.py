@@ -24,6 +24,7 @@ from wizard_common.grimoire.retriever.weaviate_vector_db import (
 class FakeMetadata:
     score: float | None = None
     certainty: float | None = None
+    distance: float | None = None
 
 
 @dataclass

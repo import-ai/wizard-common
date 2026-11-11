@@ -29,6 +29,10 @@ from wizard_common.grimoire.entity.tools import (
     Resource,
 )
 from wizard_common.grimoire.retriever.base import BaseRetriever, SearchFunction
+from wizard_common.grimoire.retriever.search_diagnostics import (
+    distance_metric,
+    record_candidates,
+)
 from wizard_common.worker.retry import RetryableTaskError
 
 logger = logging.getLogger(__name__)
@@ -80,6 +84,7 @@ class WeaviateVectorDB:
         self.client: weaviate.WeaviateAsyncClient = ...
         self._init_lock = asyncio.Lock()
         self.dimension = config.dimension
+        self._distance_metric = "unknown"
 
     async def _ensure_client(self) -> None:
         if self.client is not ...:
@@ -264,6 +269,7 @@ class WeaviateVectorDB:
         required_properties = self._required_collection_properties()
         collection = self.client.collections.get(COLLECTION_NAME)
         config = await collection.config.get()
+        self._distance_metric = distance_metric(config)
         existing_names = {prop.name for prop in config.properties}
         for prop in required_properties:
             if prop.name not in existing_names:
@@ -327,6 +333,7 @@ class WeaviateVectorDB:
         condition: Condition,
         limit: int,
         offset: int = 0,
+        diagnostics_deadline: float | None = None,
     ) -> List[Tuple[dict, float]]:
         collection = await self._get_shard(namespace_id)
         search_limit = limit + offset
@@ -455,9 +462,34 @@ class WeaviateVectorDB:
                 "Weaviate GSE leg failed, falling back to hybrid results: %s", message
             )
 
-        return [(entry["properties"], entry["score"]) for _, entry in fused_hits][
-            offset : offset + limit
-        ]
+        selected = fused_hits[offset : offset + limit]
+        config = getattr(self, "config", None)
+        if (
+            config is not None
+            and config.search_diagnostics.enabled
+            and span.is_recording()
+        ):
+            try:
+                await record_candidates(
+                    collection=collection,
+                    span=span,
+                    config=config.search_diagnostics,
+                    query=query,
+                    vector=embedding[0],
+                    filters=filters,
+                    word_properties=WORD_QUERY_PROPERTIES,
+                    selected=selected,
+                    hybrid_objects=response.objects,
+                    gse_objects=gse_objects,
+                    gse_enabled=gse_leg_enabled,
+                    gse_failed=gse_error is not None,
+                    metric=self._distance_metric,
+                    offset=offset,
+                    deadline=diagnostics_deadline,
+                )
+            except Exception:
+                span.set_attribute("search.diagnostics.status", "error")
+        return [(entry["properties"], entry["score"]) for _, entry in selected]
 
     @staticmethod
     def _chunk_from_flat_doc(doc: dict) -> Chunk:
@@ -676,6 +708,7 @@ class WeaviateVectorDB:
         conversation_ids: list[str] | None = None,
         exclude_conversation_ids: list[str] | None = None,
         resource_ids: list[str] | None = None,
+        diagnostics_deadline: float | None = None,
     ) -> List[IndexRecord]:
         condition = Condition(
             conversation_ids=conversation_ids,
@@ -692,6 +725,7 @@ class WeaviateVectorDB:
             condition=condition,
             limit=limit,
             offset=offset,
+            diagnostics_deadline=diagnostics_deadline,
         )
         return [self._index_record_from_flat_doc(hit) for hit, _ in hits]
 
