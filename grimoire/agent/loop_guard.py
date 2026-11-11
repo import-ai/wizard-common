@@ -47,6 +47,9 @@ _UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
+_HISTORY_MESSAGE_PATTERN = re.compile(
+    r'<message id="([^"]+)"[^>]*>(.*?)</message>', re.DOTALL
+)
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
@@ -548,7 +551,9 @@ def result_fingerprint(
             separators=(",", ":"),
             default=str,
         )
-    normalized = strip_volatile(value, strip_timestamps=not customized)
+    normalized = strip_volatile(
+        value, strip_timestamps=not customized, strip_uuids=not customized
+    )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -578,7 +583,7 @@ def _tool_fingerprint_value(
             return value, True
     if tool_name == "view_attachment":
         return _content_text(content), True
-    if tool_name in ("resource_search", "web_search", "search"):
+    if tool_name in ("resource_search", "web_search", "search", "private_search"):
         citations = _citation_values(
             attrs, include_updated_at=tool_name == "resource_search"
         )
@@ -593,7 +598,7 @@ def _tool_fingerprint_value(
         if value is not None:
             return value, True
     if tool_name == "list_resource_comments":
-        value = _parse_json_value(content)
+        value = _comments_value(content)
         if value is not None:
             return value, True
     if tool_name in (
@@ -607,6 +612,10 @@ def _tool_fingerprint_value(
         if value is not None:
             return value, True
         return _content_text(content), False
+    if tool_name == "search_conversation_messages":
+        value = _history_recall_value(content)
+        if value is not None:
+            return value, True
     if tool_name == "read_conversation_message":
         value = _conversation_message_value(content)
         if value is not None:
@@ -799,6 +808,26 @@ def _resource_filter_value(content: Any) -> Any | None:
     return items
 
 
+def _comments_value(content: Any) -> Any | None:
+    parsed = _parse_json_value(content)
+    if not isinstance(parsed, dict):
+        return None
+    threads = parsed.get("threads")
+    if not isinstance(threads, list):
+        return None
+    items = []
+    for thread in threads:
+        if not isinstance(thread, dict):
+            continue
+        comments = []
+        for comment in thread.get("comments") or []:
+            if isinstance(comment, dict):
+                comments.append([comment.get("id"), comment.get("updated_at")])
+        items.append([thread.get("id"), comments])
+    items.sort(key=lambda item: json.dumps(item, ensure_ascii=False, default=str))
+    return items
+
+
 def _conversation_message_value(content: Any) -> Any | None:
     parsed = _parse_json_value(content)
     if not isinstance(parsed, dict):
@@ -812,7 +841,23 @@ def _conversation_message_value(content: Any) -> Any | None:
     }
 
 
-def strip_volatile(text: str, *, strip_timestamps: bool = True) -> str:
+def _history_recall_value(content: Any) -> Any | None:
+    text = _content_text(content)
+    if "<history_recall>" not in text:
+        return None
+    hits = []
+    for message_id, body in _HISTORY_MESSAGE_PATTERN.findall(text):
+        digest = hashlib.sha256(body.strip().encode("utf-8")).hexdigest()
+        hits.append([message_id, digest])
+    if not hits:
+        return None
+    hits.sort(key=lambda item: json.dumps(item, ensure_ascii=False, default=str))
+    return hits
+
+
+def strip_volatile(
+    text: str, *, strip_timestamps: bool = True, strip_uuids: bool = True
+) -> str:
     canonical = _canonical_json(text.strip())
     if canonical is not None:
         text = canonical
@@ -820,7 +865,8 @@ def strip_volatile(text: str, *, strip_timestamps: bool = True) -> str:
     if strip_timestamps:
         text = _ISO_TIMESTAMP_PATTERN.sub("<ts>", text)
     text = _CITATION_PREFIX_PATTERN.sub("", text)
-    text = _UUID_PATTERN.sub("<id>", text)
+    if strip_uuids:
+        text = _UUID_PATTERN.sub("<id>", text)
     return _WHITESPACE_PATTERN.sub(" ", text).strip()
 
 
