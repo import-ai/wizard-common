@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -103,6 +104,16 @@ def _normalize_title(value: str) -> str:
     )
 
 
+def _contains_title_phrase(text: str, phrase: str) -> bool:
+    # Keep the original separators when checking English words and identifier edges.
+    pattern = r"\s*".join(re.escape(character) for character in phrase)
+    if phrase[0].isascii() and phrase[0].isalnum():
+        pattern = r"(?<![a-z0-9])" + pattern
+    if phrase[-1].isascii() and phrase[-1].isalnum():
+        pattern += r"(?![a-z0-9])"
+    return re.search(pattern, text.casefold()) is not None
+
+
 def _title_matches(query: str, title: str | None) -> bool:
     normalized_query = _normalize_title(query)
     normalized_title = _normalize_title(title or "")
@@ -110,7 +121,9 @@ def _title_matches(query: str, title: str | None) -> bool:
     # match every title that contains it.
     if min(len(normalized_query), len(normalized_title)) < 2:
         return False
-    return normalized_query in normalized_title or normalized_title in normalized_query
+    return _contains_title_phrase(
+        title or "", normalized_query
+    ) or _contains_title_phrase(query, normalized_title)
 
 
 class RelevanceChecker:

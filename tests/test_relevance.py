@@ -526,6 +526,22 @@ async def test_search_sends_full_chunk_text_deduplicates_and_keeps_messages(
         ("1.5", "15个提升效率的技巧", False),
         ("a-b", "About the project", False),
         ("C#", "C# 教程", True),
+        ("AI", "Chair repair manual", False),
+        ("AI", "Email etiquette", False),
+        ("Go", "Mango recipes", False),
+        ("SQL", "PostgreSQL guide", False),
+        ("17", "2017 归档", False),
+        ("NEBULA610", "NEBULA610X", False),
+        ("AI教程", "CHAIR教程", False),
+        ("repair a chair", "AI", False),
+        ("AI", "AI notes", True),
+        ("AI", "AI_notes.md", True),
+        ("AI", "基于 AI 的搜索", True),
+        ("AI", "AI教程", True),
+        ("Go", "Go语言教程", True),
+        ("second brain", "SecondBrain.md", True),
+        ("HelloWorld", "Hello World.md", True),
+        ("how to use AI", "AI", True),
     ],
 )
 def test_title_matches_normalizes_and_requires_two_characters(query, title, expected):
@@ -1532,3 +1548,26 @@ async def test_evaluate_sanitizes_invalid_json_body(monkeypatch):
     assert "Private remote diagnostic" not in traceback_text
     span.set_attribute.assert_any_call("error.type", "JSONDecodeError")
     span.set_attribute.assert_any_call("error.message", "invalid JSON response")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,title",
+    [("AI", "Chair repair manual"), ("AI", "Email etiquette"), ("Go", "Mango recipes")],
+)
+async def test_search_english_substrings_do_not_override_model_rejection(
+    monkeypatch, query, title
+):
+    install_transport(
+        monkeypatch,
+        lambda request: httpx.Response(200, json={"answers": {"s0": answer(0.99)}}),
+    )
+    checker = RelevanceChecker(config(search_enabled=True, search_threshold=0.5))
+    try:
+        result = await checker.filter_search_results(
+            query, [search_record("unrelated", title=title)]
+        )
+        assert result.kept == []
+        assert result.pending == []
+    finally:
+        await checker.aclose()
