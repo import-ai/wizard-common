@@ -26,11 +26,21 @@ class ThinkingParameters(BaseModel):
         return self
 
 
+class ModelPrice(BaseModel):
+    """Displayed credits per million tokens; numerically internal units per token."""
+
+    model_config = ConfigDict(extra="forbid")
+    input: StrictInt = Field(ge=0)
+    input_cached: StrictInt = Field(ge=0)
+    output: StrictInt = Field(ge=0)
+
+
 class ThinkingLevel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     model: str = Field(min_length=1)
     parameters: ThinkingParameters = Field(default_factory=ThinkingParameters)
+    price: ModelPrice | None = None
 
     def resolve(self, connection: OpenAIConfig) -> tuple[OpenAIConfig, dict]:
         parameters = self.parameters.model_dump(exclude_none=True)
@@ -71,15 +81,6 @@ class DefaultThinkingSteps(BaseModel):
         ):
             raise ValueError("Steps must be unique and include default_step")
         return self
-
-
-class ModelPrice(BaseModel):
-    """Displayed credits per million tokens; numerically internal units per token."""
-
-    model_config = ConfigDict(extra="forbid")
-    input: StrictInt = Field(ge=0)
-    input_cached: StrictInt = Field(ge=0)
-    output: StrictInt = Field(ge=0)
 
 
 class ThinkingModels(BaseModel):
@@ -170,7 +171,7 @@ def billing_headers(request, service_edition: str) -> dict[str, str]:
     price = None
     if group:
         selected = group.select(request.level)
-        price = models.prices.get(selected.model)
+        price = selected.price or models.prices.get(selected.model)
     return {
         "X-Omnibox-Billing": json.dumps(
             {
