@@ -6,6 +6,7 @@ from common.template_parser import TemplateParser
 from common.trace_info import TraceInfo
 
 from wizard_common.grimoire.agent.agent import Agent
+from wizard_common.grimoire.agent.loop_guard import LoopGuardConfig
 from wizard_common.grimoire.agent.tool_executor import UNKNOWN_TOOL_ERROR, ToolExecutor
 from wizard_common.grimoire.agent.tool_loop import canonical_tool_key
 from wizard_common.grimoire.entity.api import (
@@ -83,6 +84,7 @@ def make_agent(max_tool_rounds: int = 10) -> Agent:
     agent.system_prompt_template = parser.get_template("ask.j2")
     agent.tool_loop_fallback_template = parser.get_template("tool_loop_fallback.j2")
     agent.max_tool_rounds = max_tool_rounds
+    agent.loop_guard_config = LoopGuardConfig.for_basic()
     return agent
 
 
@@ -169,13 +171,13 @@ def test_canonical_tool_key_ignores_object_key_order():
     assert left == right
 
 
-async def test_duplicate_arguments_execute_once_then_drop_tools():
+async def test_repeated_read_executes_again_and_keeps_tools():
     agent = make_agent()
     executor = RecordingExecutor()
     agent.get_tool_executor = lambda *args, **kwargs: executor
     same = tool_call("1", '{"query":"判决书"}')
     again = tool_call("2", '{"query":"判决书"}')
-    agent.chat = ScriptedChat(
+    agent.chat = RecordingChat(
         [
             assistant(tool_calls=[same]),
             assistant(tool_calls=[again]),
@@ -185,13 +187,21 @@ async def test_duplicate_arguments_execute_once_then_drop_tools():
 
     await collect(agent)
 
-    assert executor.calls == 1
-    assert agent.chat.tools[0] is executor.tools
-    assert agent.chat.tools[1] is executor.tools
-    assert agent.chat.tools[2] is None
+    assert executor.calls == 2
+    assert agent.chat.requests[1]["tools"] is executor.tools
+    assert agent.chat.requests[2]["tools"] is executor.tools
+    second_round_tools = [
+        message
+        for message in agent.chat.requests[2]["messages"]
+        if message.get("role") == "tool"
+    ]
+    assert any(
+        "Note: this is repeat 1" in (message.get("content") or "")
+        for message in second_round_tools
+    )
 
 
-async def test_reordered_arguments_count_as_duplicate():
+async def test_reordered_arguments_share_the_signature_and_execute_again():
     agent = make_agent()
     executor = RecordingExecutor()
     agent.get_tool_executor = lambda *args, **kwargs: executor
@@ -205,7 +215,7 @@ async def test_reordered_arguments_count_as_duplicate():
 
     await collect(agent)
 
-    assert executor.calls == 1
+    assert executor.calls == 2
 
 
 async def test_round_limit_skips_the_next_tool_call():
@@ -464,7 +474,7 @@ async def test_current_round_unknown_tool_failure_reaches_the_next_model_call():
     assert agent.chat.replies == []
 
 
-async def test_repeated_unknown_tool_falls_back_without_raising():
+async def test_repeated_unknown_tool_blocks_then_stops_before_fallback():
     agent = make_agent()
     executor = search_executor()
     agent.get_tool_executor = lambda *args, **kwargs: executor
@@ -472,15 +482,100 @@ async def test_repeated_unknown_tool_falls_back_without_raising():
         [
             assistant(tool_calls=[named_tool_call("u1", "read_resource")]),
             assistant(tool_calls=[named_tool_call("u2", "read_resource")]),
+            assistant(tool_calls=[named_tool_call("u3", "read_resource")]),
             assistant(""),
         ]
     )
 
     chunks = await collect(agent)
 
-    assert len(agent.chat.requests) == 3
-    assert agent.chat.requests[2]["tools"] is None
-    assert "这次不能再调用工具了" in join_text(chunks)
+    assert len(agent.chat.requests) == 4
+    assert agent.chat.requests[1]["tools"] is executor.tools
+    assert agent.chat.requests[2]["tools"] is executor.tools
+    assert agent.chat.requests[3]["tools"] is None
+    stopped = [
+        chunk
+        for chunk in chunks
+        if isinstance(chunk, ChatDeltaResponse)
+        and chunk.attrs
+        and (chunk.attrs.tool_call or {}).get("status") == "stopped"
+    ]
+    assert [chunk.message.tool_call_id for chunk in stopped] == ["u2", "u3"]
+    assert all(chunk.message.content for chunk in stopped)
+    blocked_tools = [
+        message
+        for message in agent.chat.requests[2]["messages"]
+        if message.get("role") == "tool"
+    ]
+    assert any(
+        "was NOT executed" in (message.get("content") or "")
+        for message in blocked_tools
+    )
+    assert "相同参数的调用上一次已经失败" in join_text(chunks)
+
+
+class MultiRecordingExecutor:
+    def __init__(self):
+        self.calls = 0
+        self.tools = [{"type": "function", "function": {"name": "private_search"}}]
+        self.config = {}
+
+    async def astream(self, messages, trace_info=None):
+        self.calls += 1
+        yield ChatBOSResponse(role="tool")
+        for tool_call in messages[-1].message["tool_calls"]:
+            yield MessageDto(
+                message={
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": "hit",
+                }
+            )
+        yield ChatEOSResponse()
+
+
+async def test_blocked_duplicate_does_not_drop_the_other_calls_in_the_batch():
+    agent = make_agent()
+    executor = MultiRecordingExecutor()
+    agent.get_tool_executor = lambda *args, **kwargs: executor
+    agent.chat = RecordingChat(
+        [
+            assistant(tool_calls=[tool_call("a1", '{"query":"a"}')]),
+            assistant(tool_calls=[tool_call("a2", '{"query":"a"}')]),
+            assistant(
+                tool_calls=[
+                    tool_call("a3", '{"query":"a"}'),
+                    tool_call("b1", '{"query":"b"}'),
+                ]
+            ),
+            assistant("done"),
+        ]
+    )
+
+    chunks = await collect(agent)
+
+    assert executor.calls == 3
+    assert agent.chat.requests[3]["tools"] is executor.tools
+    stopped = [
+        chunk
+        for chunk in chunks
+        if isinstance(chunk, ChatDeltaResponse)
+        and chunk.attrs
+        and (chunk.attrs.tool_call or {}).get("status") == "stopped"
+    ]
+    assert [chunk.message.tool_call_id for chunk in stopped] == ["a3"]
+    tool_messages = [
+        message
+        for message in agent.chat.requests[3]["messages"]
+        if message.get("role") == "tool"
+    ]
+    assert {message.get("tool_call_id") for message in tool_messages} == {
+        "a1",
+        "a2",
+        "a3",
+        "b1",
+    }
+    assert "这次不能再调用工具了" not in join_text(chunks)
 
 
 async def test_history_filter_does_not_rewrite_request_messages():

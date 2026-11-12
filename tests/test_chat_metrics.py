@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -10,11 +11,13 @@ from openai.types.chat import ChatCompletionChunk
 from wizard_common.config import OpenAIConfig
 from wizard_common.grimoire.agent import agent as agent_module
 from wizard_common.grimoire.agent.agent import Agent
+from wizard_common.grimoire.agent.loop_guard import LoopGuardConfig
 from wizard_common.grimoire.agent.tps_calculator import TPSCalculator
 from wizard_common.grimoire.config import GrimoireOpenAIConfig
 from wizard_common.grimoire.entity.api import (
     AgentRequest,
     ChatBOSResponse,
+    ChatDeltaResponse,
     ChatEOSResponse,
     ChatMetricsResponse,
     MessageAttrs,
@@ -56,6 +59,7 @@ def make_agent():
             model="test", api_key="test", base_url="https://model.invalid/v1"
         )
     )
+    agent.loop_guard_config = LoopGuardConfig.for_basic()
     return agent
 
 
@@ -242,3 +246,137 @@ async def test_closing_astream_closes_the_active_model_stream():
         assert isinstance(await anext(stream), ChatBOSResponse)
         await stream.aclose()
     model_stream.close.assert_awaited_once()
+
+
+def tool_call_delta(index: int, call_id: str, name: str = "private_search") -> dict:
+    return {
+        "tool_calls": [
+            {
+                "index": index,
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": "{}"},
+            }
+        ]
+    }
+
+
+def recording_tool_executor():
+    async def execute(messages, **kwargs):
+        yield ChatBOSResponse(role="tool")
+        for tool_call in messages[-1].message["tool_calls"]:
+            yield MessageDto(
+                message={
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": "result",
+                }
+            )
+        yield ChatEOSResponse()
+
+    return SimpleNamespace(config={}, tools=[{"type": "function"}], astream=execute)
+
+
+def prepare_tool_agent():
+    agent = make_agent()
+    agent.max_tool_rounds = 10
+    agent.template_parser = SimpleNamespace(
+        render_template=lambda *_args, **_kwargs: "system"
+    )
+    agent.system_prompt_template = None
+    agent.get_tool_executor = lambda *args, **kwargs: recording_tool_executor()
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_forced_final_emits_loop_guard_attrs_delta_before_the_final_eos():
+    agent = prepare_tool_agent()
+    streams = [
+        ModelStream([tool_call_delta(0, f"call-{index}")]) for index in range(1, 5)
+    ] + [ModelStream([{"content": "final answer"}])]
+    with patch.object(OpenAIConfig, "chat", side_effect=streams):
+        responses = [r async for r in agent.astream(TraceInfo(), request())]
+
+    attrs_deltas = [
+        response
+        for response in responses
+        if isinstance(response, ChatDeltaResponse)
+        and response.attrs
+        and response.attrs.context
+        and "loop_guard" in response.attrs.context
+    ]
+    assert len(attrs_deltas) == 1
+    attrs_delta = attrs_deltas[0]
+    assert attrs_delta.message.content is None
+    telemetry = attrs_delta.attrs.context["loop_guard"]
+    assert telemetry == {
+        "stop_reason": "duplicate",
+        "tool_name": "private_search",
+        "repeat_count": 2,
+        "cycle_length": None,
+        "tool_rounds": 4,
+        "blocked_count": 1,
+    }
+    last_eos = max(
+        index
+        for index, response in enumerate(responses)
+        if isinstance(response, ChatEOSResponse)
+    )
+    assert responses.index(attrs_delta) < last_eos
+    final_eos = responses[last_eos]
+    assert isinstance(final_eos, ChatEOSResponse)
+
+
+class FakeSpan:
+    def __init__(self):
+        self.attributes: dict = {}
+
+    def set_attribute(self, key, value):
+        self.attributes[key] = value
+
+    def set_attributes(self, values: dict):
+        self.attributes.update(values)
+
+
+class FakeTracer:
+    def __init__(self):
+        self.spans: list[tuple[str, FakeSpan]] = []
+
+    def start_as_current_span(self, name):
+        span = FakeSpan()
+        self.spans.append((name, span))
+        return contextlib.nullcontext(span)
+
+
+@pytest.mark.asyncio
+async def test_normal_completion_after_a_block_records_blocked_count_only():
+    agent = prepare_tool_agent()
+    streams = [
+        ModelStream([tool_call_delta(0, "call-1"), tool_call_delta(1, "call-2")]),
+        ModelStream([{"content": "answer"}]),
+    ]
+    fake_tracer = FakeTracer()
+    with (
+        patch.object(agent_module, "tracer", fake_tracer),
+        patch.object(OpenAIConfig, "chat", side_effect=streams),
+    ):
+        responses = [r async for r in agent.astream(TraceInfo(), request())]
+
+    outer = next(span for name, span in fake_tracer.spans if name == "agent.astream")
+    assert outer.attributes["agent.loop_guard.blocked_count"] == 1
+    assert "agent.loop_guard.stop_reason" not in outer.attributes
+    assert not any(
+        isinstance(response, ChatDeltaResponse)
+        and response.attrs
+        and response.attrs.context
+        for response in responses
+    )
+    stopped = [
+        response
+        for response in responses
+        if isinstance(response, ChatDeltaResponse)
+        and response.attrs
+        and response.attrs.tool_call
+        and response.attrs.tool_call.get("status") == "stopped"
+    ]
+    assert [response.message.tool_call_id for response in stopped] == ["call-2"]
