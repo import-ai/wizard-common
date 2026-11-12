@@ -1311,7 +1311,13 @@ async def test_search_reports_status_and_counts_for_partial_batches(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_search_caps_chunk_events_and_reports_omissions(monkeypatch):
+async def test_search_records_all_chunk_events_in_overflow_spans(monkeypatch):
+    from wizard_common.grimoire.retriever import trace_events
+
+    overflow = MagicMock()
+    mock_tracer = MagicMock()
+    mock_tracer.start_as_current_span.return_value.__enter__.return_value = overflow
+    monkeypatch.setattr(trace_events, "tracer", mock_tracer)
     records = [search_record(f"r{index}") for index in range(200)]
 
     def handle(request):
@@ -1338,13 +1344,12 @@ async def test_search_caps_chunk_events_and_reports_omissions(monkeypatch):
 
     assert result.kept == records
     assert result.pending == []
-    calls = span.add_event.call_args_list
-    assert len(calls) == 128
-    assert [call.args[0] for call in calls[:127]] == ["relevance.chunk"] * 127
-    assert calls[126].args[1]["chunk.index"] == 126
-    assert calls[126].args[1]["chunk.batch_index"] == 7
-    assert calls[127].args[0] == "relevance.chunks_truncated"
-    assert calls[127].args[1] == {"relevance.omitted_count": 73}
+    calls = span.add_event.call_args_list + overflow.add_event.call_args_list
+    assert len(span.add_event.call_args_list) == 100
+    assert len(overflow.add_event.call_args_list) == 100
+    assert [call.args[0] for call in calls] == ["relevance.chunk"] * 200
+    assert [call.args[1]["chunk.index"] for call in calls] == list(range(200))
+    assert calls[-1].args[1]["chunk.batch_index"] == 12
 
 
 @pytest.mark.asyncio

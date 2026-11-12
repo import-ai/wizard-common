@@ -13,13 +13,10 @@ from pydantic import BaseModel, Field, model_validator
 from wizard_common.grimoire.config import RelevanceConfig
 from wizard_common.grimoire.entity.chunk import ResourceChunkRetrieval
 from wizard_common.grimoire.entity.index_record import IndexRecord, IndexRecordType
+from wizard_common.grimoire.retriever.trace_events import event_spans
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-# OTel Python keeps 128 events per span by default; reserve one slot for the
-# truncation event.
-MAX_RELEVANCE_CHUNK_EVENTS = 127
 
 SEARCH_BATCH_CONCURRENCY = 2
 
@@ -583,12 +580,12 @@ class RelevanceChecker:
                 kept_records.append(record)
 
         if recording:
-            emitted_chunk_events = 0
-            omitted_chunk_events = 0
-            for position, record in enumerate(chunk_records):
-                if emitted_chunk_events >= MAX_RELEVANCE_CHUNK_EVENTS:
-                    omitted_chunk_events += 1
-                    continue
+            for position, (record, event_span) in enumerate(
+                zip(
+                    chunk_records,
+                    event_spans(span, len(chunk_records), "relevance.chunks"),
+                )
+            ):
                 chunk = record.chunk
                 attributes: dict[str, object] = {
                     "chunk.index": index_offset + position,
@@ -611,13 +608,7 @@ class RelevanceChecker:
                 pending_reason = pending_reasons[position]
                 if pending_reason is not None:
                     attributes["chunk.pending_reason"] = pending_reason
-                span.add_event("relevance.chunk", attributes)
-                emitted_chunk_events += 1
-            if omitted_chunk_events:
-                span.add_event(
-                    "relevance.chunks_truncated",
-                    {"relevance.omitted_count": omitted_chunk_events},
-                )
+                event_span.add_event("relevance.chunk", attributes)
 
         succeeded_batches = batch_status.count("success")
         failed_batches = batch_status.count("error") + followup_failed_batches

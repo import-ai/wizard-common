@@ -16,7 +16,7 @@ class WeaviateConfig(BaseModel):
 
 class SearchDiagnosticsConfig(BaseModel):
     enabled: bool = True
-    max_candidates: int = Field(default=100, ge=1, le=100)
+    max_candidates: int = Field(default=0, ge=0)
 
 
 class SearchThresholdsConfig(BaseModel):

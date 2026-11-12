@@ -2,6 +2,7 @@ from typing import Any
 
 from wizard_common.grimoire.config import SearchDiagnosticsConfig
 from wizard_common.grimoire.retriever.search_retrieval import RetrievalWindow
+from wizard_common.grimoire.retriever.trace_events import event_spans
 
 
 def distance_metric(config: Any) -> str:
@@ -23,7 +24,11 @@ def record_candidates(
     metric: str,
     offset: int,
 ) -> None:
-    candidates = window.candidates[: config.max_candidates]
+    candidates = (
+        window.candidates[: config.max_candidates]
+        if config.max_candidates
+        else window.candidates
+    )
     span.set_attributes(
         {
             "search.diagnostics.candidate_count": len(window.candidates),
@@ -37,7 +42,10 @@ def record_candidates(
             ),
         }
     )
-    for rank, candidate in enumerate(candidates, start=offset + 1):
+    for rank, (candidate, event_span) in enumerate(
+        zip(candidates, event_spans(span, len(candidates), "search.candidates")),
+        start=offset + 1,
+    ):
         attributes: dict[str, Any] = {
             "candidate.uuid": candidate.uuid,
             "candidate.rank": rank,
@@ -75,4 +83,4 @@ def record_candidates(
         ):
             if candidate.properties.get(source):
                 attributes[target] = candidate.properties[source]
-        span.add_event("search.candidate", attributes)
+        event_span.add_event("search.candidate", attributes)

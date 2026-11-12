@@ -80,7 +80,7 @@ def test_cap_reports_truncation_without_changing_result_window():
     window = RetrievalWindow(candidates=[candidate(i) for i in range(1, 102)])
     record_candidates(
         span=span,
-        config=SearchDiagnosticsConfig(),
+        config=SearchDiagnosticsConfig(max_candidates=100),
         window=window,
         metric="cosine",
         offset=0,
@@ -161,7 +161,9 @@ def test_config_defaults_bounds_and_named_metric():
     ]:
         with pytest.raises(ValidationError):
             SearchThresholdsConfig(**kwargs)
-    for cap in [0, 101]:
+    assert SearchDiagnosticsConfig().max_candidates == 0
+    assert SearchDiagnosticsConfig(max_candidates=1000).max_candidates == 1000
+    for cap in [-1]:
         with pytest.raises(ValidationError):
             SearchDiagnosticsConfig(max_candidates=cap)
     config = SimpleNamespace(
@@ -173,3 +175,46 @@ def test_config_defaults_bounds_and_named_metric():
     )
     assert distance_metric(config) == "cosine"
     assert distance_metric(SimpleNamespace()) == "unknown"
+
+
+@pytest.mark.parametrize("count", [0, 100, 101, 1001])
+def test_all_candidates_survive_default_sdk_event_limits(count, monkeypatch):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from wizard_common.grimoire.retriever import trace_events
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer(__name__)
+    monkeypatch.setattr(trace_events, "tracer", tracer)
+    window = RetrievalWindow(candidates=[candidate(i + 1) for i in range(count)])
+    with tracer.start_as_current_span("retrieval") as parent:
+        record_candidates(
+            span=parent,
+            config=SearchDiagnosticsConfig(),
+            window=window,
+            metric="cosine",
+            offset=5,
+        )
+    spans = exporter.get_finished_spans()
+    events = [event for span in spans for event in span.events]
+    assert sorted(event.attributes["candidate.rank"] for event in events) == list(
+        range(6, count + 6)
+    )
+    assert len({event.attributes["candidate.uuid"] for event in events}) == count
+    assert all(span.dropped_events == 0 for span in spans)
+    assert all(len(span.events) <= 100 for span in spans)
+    root = next(span for span in spans if span.name == "retrieval")
+    assert root.attributes["search.diagnostics.recorded_count"] == count
+    assert root.attributes["search.diagnostics.truncated_count"] == 0
+    assert all(
+        span.parent.span_id == root.context.span_id
+        for span in spans
+        if span is not root
+    )
+    provider.shutdown()
