@@ -13,7 +13,6 @@ a multiplier on the final score, and requires no reindexing or extra query.
 Title matches can rise within each keyword branch before RRF. Body-only matches
 are not excluded by title boosting. Thresholds and diagnostic keyword scores refer
 to the raw BM25F result of this weighted query, not an unweighted diagnostic probe.
-The cache retrieval signature is versioned with this weighting policy.
 
 ## Initial defaults
 
@@ -40,10 +39,7 @@ Empty-query listing keeps its existing fetch behavior without embeddings.
 Each branch requests offset + limit + 1 objects from its beginning. Vector distance
 is filtered inside Weaviate; keyword floors are applied before fusion. The returned
 internal search page carries explicit has_more based on lookahead and remaining
-eligible branch tails. Wizard advances by the actual raw page length, not a fixed
-window size, and never treats a short filtered page alone as exhaustion. Its existing
-scan/time budgets and resource deduplication, ACL and relevance filter remain.
-Cache keys include threshold values and the split-retrieval version.
+eligible branch tails. ACL and resource deduplication remain unchanged.
 
 This remains bounded top-K fusion, not a snapshot cursor: increasing recall depth
 or concurrent corpus updates may affect ordering across windows. Public pagination
@@ -60,7 +56,7 @@ closest observed vector-only noise (0.5033) in the NEBULA610X sample. Its WORD s
 was 6.6754. This is a starting configuration, not multilingual quality validation.
 Evaluate Chinese, English, mixed text, prefixes, short terms and no-match queries
 before tightening defaults. Inspect retained/rejected counts, target recall,
-relevance-filter acceptance and end-to-end latency; do not tune against RRF scores.
+retrieval quality, ACL and end-to-end latency; do not tune against RRF scores.
 
 ## Stable snapshot recall
 

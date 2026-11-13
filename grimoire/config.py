@@ -123,18 +123,10 @@ class RelevanceConfig(BaseModel):
     bing_threshold: float = Field(default=0.1, ge=0, le=1)
     resource_enabled: bool = False
     resource_threshold: float | None = Field(default=None, ge=0, le=1)
-    search_enabled: bool = True
-    search_threshold: float = Field(default=0.5, ge=0, le=1)
-    # System One accepts at most 16 questions per request.
-    search_batch_size: int = Field(default=16, ge=1, le=16)
-    search_timeout_sec: float = Field(default=3.0, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_enabled_checks(self):
-        requires_checker = self.bing_enabled or self.resource_enabled
-        # Search is enabled by default, so an unconfigured deployment must still start.
-        partially_configured = bool(self.base_url) or bool(self.model)
-        if requires_checker or partially_configured:
+        if self.bing_enabled or self.resource_enabled:
             url = urlsplit(self.base_url or "")
             if (
                 url.scheme not in ("http", "https")

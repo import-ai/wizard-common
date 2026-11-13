@@ -318,13 +318,6 @@ class WeaviateVectorDB:
         )
         return [item.embedding for item in embeddings.data]
 
-    @property
-    def retrieval_signature(self) -> str:
-        return (
-            "split-thresholds-title3-v2:"
-            + self.config.search_thresholds.model_dump_json()
-        )
-
     @tracer.start_as_current_span("WeaviateVectorDB._hybrid_query")
     async def _retrieve_window(
         self,
