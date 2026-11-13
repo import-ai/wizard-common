@@ -15,11 +15,28 @@ class WeaviateConfig(BaseModel):
     api_key: str | None = Field(default=None)
 
 
+class SearchDiagnosticsConfig(BaseModel):
+    enabled: bool = True
+    max_candidates: int = Field(default=0, ge=0)
+
+
+class SearchThresholdsConfig(BaseModel):
+    max_distance: float | None = Field(default=0.5, ge=0, le=2, allow_inf_nan=False)
+    word_min_bm25_score: float | None = Field(default=1.0, ge=0, allow_inf_nan=False)
+    gse_min_bm25_score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
 class VectorConfig(BaseModel):
     embedding: OpenAIConfig
     weaviate: WeaviateConfig = Field(default_factory=WeaviateConfig)
     batch_size: int = Field(default=1)
     dimension: int = Field(default=1536)
+    search_diagnostics: SearchDiagnosticsConfig = Field(
+        default_factory=SearchDiagnosticsConfig
+    )
+    search_thresholds: SearchThresholdsConfig = Field(
+        default_factory=SearchThresholdsConfig
+    )
 
 
 GrimoireOpenAIConfigKey = Literal["mini", "default", "large", "vision"]

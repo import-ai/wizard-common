@@ -1,7 +1,8 @@
 import asyncio
 import json
+import traceback
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import httpx
 import pytest
@@ -17,6 +18,7 @@ from wizard_common.grimoire.config import (
 from wizard_common.grimoire.entity.chunk import Chunk, ChunkType, ResourceChunkRetrieval
 from wizard_common.grimoire.entity.retrieval import Score
 from wizard_common.grimoire.entity.tools import PrivateSearchTool
+from wizard_common.grimoire.retriever import relevance as relevance_module
 from wizard_common.grimoire.retriever.relevance import (
     BING_QUESTION,
     RelevanceChecker,
@@ -66,6 +68,16 @@ def install_transport(monkeypatch, handler):
 
     monkeypatch.setattr(httpx, "AsyncClient", create)
     return clients
+
+
+def install_evaluate_span(monkeypatch):
+    span = MagicMock()
+    span.__enter__.return_value = span
+    span.__exit__.return_value = False
+    tracer = Mock()
+    tracer.start_as_current_span.return_value = span
+    monkeypatch.setattr(relevance_module, "tracer", tracer)
+    return span
 
 
 def retrieval(resource_id):
@@ -350,3 +362,53 @@ async def test_resource_filter_drops_irrelevant_or_preserves_results_on_failure(
         assert len(requests) == 1
     finally:
         await checker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_records_and_chains_http_status_error(monkeypatch):
+    install_transport(monkeypatch, lambda request: httpx.Response(500))
+    span = install_evaluate_span(monkeypatch)
+    checker = RelevanceChecker(config())
+    try:
+        with pytest.raises(
+            RelevanceError, match="^relevance_check_failed$"
+        ) as exc_info:
+            await checker.check_bing("query", hits())
+    finally:
+        await checker.aclose()
+
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, httpx.HTTPStatusError)
+    assert "500" in str(cause)
+    span.set_attribute.assert_any_call("error.type", "HTTPStatusError")
+    span.set_attribute.assert_any_call("error.message", "500 Internal Server Error")
+
+
+@pytest.mark.asyncio
+async def test_evaluate_sanitizes_invalid_json_body(monkeypatch):
+    install_transport(
+        monkeypatch,
+        lambda request: httpx.Response(200, text="Private remote diagnostic"),
+    )
+    span = install_evaluate_span(monkeypatch)
+    checker = RelevanceChecker(config())
+    try:
+        with pytest.raises(
+            RelevanceError, match="^relevance_check_failed$"
+        ) as exc_info:
+            await checker.check_bing("query", hits())
+    finally:
+        await checker.aclose()
+
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, ValueError)
+    assert str(cause) == "invalid JSON response"
+    assert "Private remote diagnostic" not in str(cause)
+    traceback_text = "".join(
+        traceback.format_exception(
+            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
+        )
+    )
+    assert "Private remote diagnostic" not in traceback_text
+    span.set_attribute.assert_any_call("error.type", "JSONDecodeError")
+    span.set_attribute.assert_any_call("error.message", "invalid JSON response")
