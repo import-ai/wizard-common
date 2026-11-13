@@ -1,5 +1,29 @@
 {% if lang == "English" %}
+{% if reason == "duplicate" %}
+I stopped because I kept reading the same content with identical arguments and the result did not change. Please continue from the information above, or ask in a different way.
+{% elif reason == "write_repeat" %}
+I stopped because the same write operation had already been performed with identical arguments. To avoid applying the same change twice, I did not repeat it. Please check the result above or ask me to adjust the arguments.
+{% elif reason == "failed_repeat" %}
+I stopped because a call with the same arguments had already failed, and retrying it unchanged would fail again. Please fix the request or ask in a different way.
+{% elif reason == "cycle" %}
+I stopped because I detected a cycle of tool calls whose results did not change. Please continue from the information above, or ask in a different way.
+{% elif reason == "invalid_resource_edit" %}
+The edit did not pass validation and was not written. Please check the resource content and try again.
+{% else %}
 I can't make any more tool calls for this reply. Please use the results above, or ask in a different way.
+{% endif %}
+{% else %}
+{% if reason == "duplicate" %}
+相同参数的读取重复了多次并且结果没有变化，我已经停止继续调用工具。请根据上面已经找到的内容继续，或者把问题换个说法。
+{% elif reason == "write_repeat" %}
+相同参数的写操作已经执行过，为避免重复修改，我没有再次执行。请检查上面的结果，或者让我调整参数再试。
+{% elif reason == "failed_repeat" %}
+相同参数的调用上一次已经失败，重试相同调用不会成功，我已经停止。请修正请求，或者把问题换个说法。
+{% elif reason == "cycle" %}
+检测到若干工具调用的循环且结果没有变化，我已经停止继续调用工具。请根据上面已经找到的内容继续，或者把问题换个说法。
+{% elif reason == "invalid_resource_edit" %}
+这次编辑没有通过校验，也没有写入。请检查资源内容后重试。
 {% else %}
 这次不能再调用工具了。请根据上面已经找到的内容继续，或者把问题换个说法。
+{% endif %}
 {% endif %}

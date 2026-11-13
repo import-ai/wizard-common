@@ -27,6 +27,7 @@ packages = [
     "wizard_common.agent",
     "wizard_common.grimoire",
     "wizard_common.grimoire.agent",
+    "wizard_common.grimoire.agent.loop_guard",
     "wizard_common.grimoire.entity",
     "wizard_common.grimoire.retriever",
     "wizard_common.wizard",
