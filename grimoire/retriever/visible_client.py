@@ -1,7 +1,7 @@
 from typing import Protocol
 
 import httpx
-from opentelemetry import trace
+from opentelemetry import propagate, trace
 from pydantic import BaseModel, Field
 
 tracer = trace.get_tracer(__name__)
@@ -34,9 +34,11 @@ class BackendVisibleClient(BackendVisibleBaseClient):
         trace.get_current_span().set_attribute("len(resource_ids)", len(unique_ids))
         if not unique_ids:
             return []
+        headers = {"X-User-ID": self.user_id}
+        propagate.inject(headers)
         async with httpx.AsyncClient(
             base_url=f"{self.base_url}/internal/api/v1/namespaces/{self.namespace_id}",
-            headers={"X-User-ID": self.user_id},
+            headers=headers,
             timeout=httpx.Timeout(10.0, connect=5.0),
         ) as client:
             httpx_response = await client.post(

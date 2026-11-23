@@ -1,4 +1,5 @@
 import httpx
+from opentelemetry import propagate
 
 _LIST_PAGE_LIMIT = 200
 _OMNIBOX_DIR = ".omnibox"
@@ -76,9 +77,11 @@ async def load_omnibox_markdown(
         if http_client is None:
             if not base_url or not namespace_id or not user_id:
                 return ""
+            headers = {"X-User-ID": user_id}
+            propagate.inject(headers)
             http_client = httpx.AsyncClient(
                 base_url=f"{base_url.rstrip('/')}/internal/api/v1/namespaces/{namespace_id}",
-                headers={"X-User-ID": user_id},
+                headers=headers,
                 timeout=httpx.Timeout(10.0, connect=5.0),
             )
             close_client = True
