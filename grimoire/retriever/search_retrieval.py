@@ -57,7 +57,6 @@ async def retrieve_window(
     offset: int,
     limit: int,
     span: Any,
-    snapshot: bool = False,
 ) -> RetrievalWindow:
     depth = offset + limit + 1
     gse_enabled = any(character.isalnum() for character in gse_query)
@@ -141,9 +140,6 @@ async def retrieve_window(
             return RetrievalWindow()
         raise failures[0]
 
-    if snapshot and failures:
-        raise failures[0]
-
     fused: dict[str, RetrievedCandidate] = {}
     raw_metrics: dict[str, dict[str, float | None]] = {}
     branch_status = {"gse": "disabled"}
@@ -164,7 +160,7 @@ async def retrieve_window(
         )
         measured = [(obj, _value(obj, field)) for obj in objects]
         branch_status[name] = "ok"
-        selected = measured[:limit] if snapshot else measured
+        selected = measured
         raw_metrics[name] = {str(obj.uuid): value for obj, value in selected}
         accepted = [
             (obj, value)
@@ -248,9 +244,7 @@ async def retrieve_window(
         }
     )
     return RetrievalWindow(
-        candidates=ordered if snapshot else ordered[offset : offset + limit],
-        has_more=branch_more
-        if snapshot
-        else branch_more or len(ordered) > offset + limit,
+        candidates=ordered[offset : offset + limit],
+        has_more=branch_more or len(ordered) > offset + limit,
         branch_status=branch_status,
     )
