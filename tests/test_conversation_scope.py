@@ -21,7 +21,8 @@ class SearchResponse:
 async def test_scope_is_sent_to_vector_query_before_limit(included, excluded):
     db = object.__new__(WeaviateVectorDB)
     collection = AsyncMock()
-    collection.query.hybrid.return_value = SearchResponse([])
+    collection.query.near_vector.return_value = SearchResponse([])
+    collection.query.bm25.return_value = SearchResponse([])
     db._get_shard = AsyncMock(return_value=collection)
     db._embed = AsyncMock(return_value=[[1.0]])
     condition = Condition(
@@ -31,8 +32,8 @@ async def test_scope_is_sent_to_vector_query_before_limit(included, excluded):
         exclude_conversation_ids=excluded,
     )
     assert await db._hybrid_query("space", "query", condition, limit=1) == []
-    arguments = collection.query.hybrid.call_args.kwargs
-    assert arguments["limit"] == 1
+    arguments = collection.query.near_vector.call_args.kwargs
+    assert arguments["limit"] == 2
     wire = _FilterToREST.convert(arguments["filters"])
 
     def leaves(node):
