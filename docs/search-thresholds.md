@@ -21,8 +21,10 @@ to the raw BM25F result of this weighted query, not an unweighted diagnostic pro
   do not reuse this value for another metric or embedding without evaluation.
 - `vector.search_thresholds.word_min_bm25_score = 1.0`: inclusive original WORD
   BM25 floor, applied in the application. This is corpus/query dependent, not a probability.
-- `vector.search_thresholds.gse_min_bm25_score = None`: no GSE floor; actual
-  keyword matches remain eligible. GSE tokenization can still admit weak matches.
+- `vector.search_thresholds.gse_min_bm25_score = 1.0`: inclusive original GSE
+  BM25 floor, applied in the application. It mirrors the WORD floor as a starting
+  value so weak GSE-only matches are rejected; like the WORD floor it is corpus
+  and query dependent, not a probability.
 
 Each field accepts `None` in typed configuration to disable its gate independently.
 Environment variable examples are in both Wizard example.env files; omitting them

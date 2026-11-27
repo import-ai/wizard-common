@@ -23,7 +23,7 @@ class SearchDiagnosticsConfig(BaseModel):
 class SearchThresholdsConfig(BaseModel):
     max_distance: float | None = Field(default=0.5, ge=0, le=2, allow_inf_nan=False)
     word_min_bm25_score: float | None = Field(default=1.0, ge=0, allow_inf_nan=False)
-    gse_min_bm25_score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    gse_min_bm25_score: float | None = Field(default=1.0, ge=0, allow_inf_nan=False)
 
 
 class VectorConfig(BaseModel):

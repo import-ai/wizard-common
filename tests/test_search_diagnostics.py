@@ -151,7 +151,7 @@ def test_config_defaults_bounds_and_named_metric():
     assert (
         c.max_distance == 0.5
         and c.word_min_bm25_score == 1
-        and c.gse_min_bm25_score is None
+        and c.gse_min_bm25_score == 1
     )
     for kwargs in [
         {"max_distance": 2.1},
@@ -175,6 +175,20 @@ def test_config_defaults_bounds_and_named_metric():
     )
     assert distance_metric(config) == "cosine"
     assert distance_metric(SimpleNamespace()) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_default_gse_floor_rejects_weak_gse_only_candidates():
+    db, _ = make_db(
+        vector_objects=[obj(10, distance=0.4)],
+        word_objects=[obj(11, score=2)],
+        gse_objects=[obj(12, score=0.01)],
+    )
+    window = await db._retrieve_window("space", "query 中文", CONDITION, limit=20)
+    assert {c.uuid for c in window.candidates} == {
+        str(uuid.UUID(int=10)),
+        str(uuid.UUID(int=11)),
+    }
 
 
 @pytest.mark.parametrize("count", [0, 100, 101, 1001])

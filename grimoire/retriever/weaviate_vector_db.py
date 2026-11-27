@@ -76,6 +76,7 @@ def split_message_content(content: str, chunk_size: int = MESSAGE_CHUNK_SIZE):
 class VectorSearchPage(BaseModel):
     records: list[IndexRecord]
     has_more: bool
+    partial: bool = False
 
 
 class WeaviateVectorDB:
@@ -631,6 +632,7 @@ class WeaviateVectorDB:
                 for c in window.candidates
             ],
             has_more=window.has_more,
+            partial=any(status == "error" for status in window.branch_status.values()),
         )
 
     @tracer.start_as_current_span("WeaviateVectorDB.search")

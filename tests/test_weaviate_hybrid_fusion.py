@@ -9,7 +9,11 @@ from weaviate.exceptions import WeaviateQueryError
 
 from wizard_common.grimoire.config import SearchThresholdsConfig, VectorConfig
 from wizard_common.grimoire.entity.tools import Condition
-from wizard_common.grimoire.retriever.search_retrieval import ALPHA, RRF_K
+from wizard_common.grimoire.retriever.search_retrieval import (
+    ALPHA,
+    RRF_K,
+    RetrievalWindow,
+)
 from wizard_common.grimoire.retriever.weaviate_vector_db import WeaviateVectorDB
 
 
@@ -99,7 +103,10 @@ async def test_ascii_query_runs_two_native_legs_once_without_diagnostic_probes(q
 @pytest.mark.asyncio
 @pytest.mark.parametrize("query", ["标题编码", "NEBULA610X 标题编码"])
 async def test_cjk_leg_receives_only_cjk_and_has_independent_threshold(query):
-    db, collection = make_db(gse_objects=[obj(1, score=0.1)])
+    thresholds = SearchThresholdsConfig(
+        word_min_bm25_score=5.0, gse_min_bm25_score=0.05
+    )
+    db, collection = make_db(gse_objects=[obj(1, score=0.1)], thresholds=thresholds)
     window = await db._retrieve_window("space", query, CONDITION, limit=20)
     calls = collection.query.bm25.call_args_list
     assert calls[0].kwargs["query"] == query
@@ -119,7 +126,7 @@ async def test_union_includes_vector_only_keyword_only_and_cjk_only():
     db, _ = make_db(
         vector_objects=[obj(1, distance=0.5)],
         word_objects=[obj(2, score=1)],
-        gse_objects=[obj(3, score=0.1)],
+        gse_objects=[obj(3, score=1)],
     )
     window = await db._retrieve_window("space", "query 中文", CONDITION, limit=20)
     assert {c.uuid: c.passed_legs for c in window.candidates} == {
@@ -291,6 +298,52 @@ async def test_keyword_and_embedding_run_concurrently():
     db._embed.side_effect = embedding
     collection.query.bm25.side_effect = bm25
     await asyncio.wait_for(db._retrieve_window("space", "query", CONDITION, 3), 1)
+
+
+@pytest.mark.asyncio
+async def test_search_page_reports_partial_branch_failure_and_has_more():
+    db, _ = make_db()
+    db._retrieve_window = AsyncMock(
+        return_value=RetrievalWindow(
+            has_more=True,
+            branch_status={"vector": "error", "word": "ok", "gse": "disabled"},
+        )
+    )
+
+    page = await db.search_page(
+        query="query",
+        namespace_id="space",
+        user_id=None,
+        record_type=None,
+        offset=0,
+        limit=20,
+    )
+
+    assert page.partial is True
+    assert page.has_more is True
+    assert page.records == []
+
+
+@pytest.mark.asyncio
+async def test_search_page_is_complete_when_all_branches_succeed():
+    db, _ = make_db()
+    db._retrieve_window = AsyncMock(
+        return_value=RetrievalWindow(
+            branch_status={"vector": "ok", "word": "ok", "gse": "disabled"}
+        )
+    )
+
+    page = await db.search_page(
+        query="query",
+        namespace_id="space",
+        user_id=None,
+        record_type=None,
+        offset=0,
+        limit=20,
+    )
+
+    assert page.partial is False
+    assert page.has_more is False
 
 
 @pytest.mark.asyncio
